@@ -1,20 +1,20 @@
 # Padfoot
 <p>
 <img src="docs/logo.png" alt="Padfoot logo" align="left" style="width:100px;"/>
-**Padfoot** is a structural variant (SV) and copy number alteration (CNA) annotation tool designed to work seamlessly with output from **Severus** and **Wakhan**. It provides biological and functional annotations for SVs and CNAs, enabling downstream interpretation of genomic alterations.
+<b>Padfoot</b> is a structural variant (SV) and copy number alteration (CNA) annotation tool designed to work seamlessly with output from <b>Severus</b> and <b>Wakhan</b>. It provides biological and functional annotations for SVs and CNAs, enabling downstream interpretation of genomic alterations.
 </p>
 
 <br/>
----
+
 
 ## Features
 
 - Annotates somatic SVs called by [Severus](https://github.com/KolmogorovLab/Severus)
 - Annotates CNAs reported by [Wakhan](https://github.com/KolmogorovLab/Wakhan)
-- Outputs enriched functional annotations for prioritization
+- Outputs functional annotations for prioritization
 - Designed for cancer genome analysis using long-read data
 
----
+
 
 ## Contents
 
@@ -40,8 +40,8 @@ but you'll still need to install the dependencies via conda:
 git clone https://github.com/KolmogorovLab/Padfoot.git
 cd Padfoot
 conda env create --name padfoot_env --file environment.yml
-conda activate severus_env
-./severus.py
+conda activate padfoot_env
+./padfoot.py
 ```
 
 ## Quick Usage
