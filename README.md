@@ -30,7 +30,7 @@ The easiest way to install is through conda:
 ```
 conda create -n padfoot_env padfoot
 conda activate padfoot_env
-severus --help
+padfoot --help
 ```
 
 Or alternatively, you can clone the repository and run without installation,
