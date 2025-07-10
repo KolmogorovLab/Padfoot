@@ -60,18 +60,12 @@ def main():
         (description="Find breakpoints and build breakpoint graph from a bam file")
 
     parser.add_argument("-v", "--version", action="version", version=_version())
-    parser.add_argument("--severus_svs", dest="vcf_file",
+    parser.add_argument("--severus-vcf", dest="vcf_file",
                         metavar="path", required=True, default=None,
-                        help="path to severus vcf file")
-    parser.add_argument("--HP1", dest="hp1_file",
+                        help="path to Severus vcf file")
+    parser.add_argument("--wakhan-vcf", dest="cna_vcf",
                         metavar="path", required=True, default=None,
-                        help="path to Wakhan HP1 file")
-    parser.add_argument("--HP2", dest="hp2_file",
-                        metavar="path", required=True, default=None,
-                        help="path to Wakhan HP2 file")
-    parser.add_argument("--LOH", dest="loh_file",
-                        metavar="path", required=True, default=None,
-                        help="path to Wakhan LOH file")
+                        help="path to Wakhan vcf file")
     parser.add_argument("--ref", "-r", dest="ref",
                         metavar="path", required=True, default=None,
                         help="path to reference file")

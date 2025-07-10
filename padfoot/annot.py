@@ -147,140 +147,61 @@ def get_bps(vcf_file):
         svs[vcf_id]=(SV(bp_1, dir1, bp_2, dir2, supp, has_ins, sv_type,vaf, vcf_id, is_single, vntr,ins_seq, cluster_id, detailed_type, hp1, hp2))
     return list(svs.values())
 
-def get_CNA(hp1_file, hp2_file, loh_file, svs):
-    CNAs = defaultdict(list)
+def get_CNA(cna_vcf, svs):
+    vcf = pysam.VariantFile(cna_vcf)
+    hp1ls = defaultdict(list)
+    hp2ls = defaultdict(list)
     LOH  = defaultdict(list)
+    CNAs = defaultdict(list)
     ploidy = []
-    cn1 = []
-    LOH_THR = 1000000
-    POS_THR = 10000
-    f = open(loh_file)
-    for line in f:
-        if line.startswith('#'):
-            continue
-        ref_id, pos_1, pos_2 = line.strip().split()
-        if int(pos_2) - int(pos_1) < LOH_THR:
-            continue
-        if ref_id in LOH.keys():
-            LOH[ref_id][0].append(int(pos_1))
-            LOH[ref_id][1].append(int(pos_2))
+    cov1 = []
+    
+    for var in vcf:
+        ref_id, pos_1, pos_2 = var.chrom, var.pos, var.stop
+        hp1, hp2 = var.samples['Sample']['CN1'], var.samples['Sample']['CN2']
+        if hp1:
+            cov1.append( var.samples['Sample']['COV1']/hp1)
+        if ref_id in hp1ls:
+            if not hp1ls[ref_id][0][-1] == hp1:
+                hp1ls[ref_id][0].append(hp1)
+                hp1ls[ref_id][1].append(pos_1)
+            if not hp2ls[ref_id][0][-1] == hp2:
+                hp2ls[ref_id][0].append(hp2)
+                hp2ls[ref_id][1].append(pos_1)
         else:
-            LOH[ref_id]= [[],[]]
-            LOH[ref_id][0].append(int(pos_1))
-            LOH[ref_id][1].append(int(pos_2))
-    
-    for line in open(hp1_file, 'r'):
-        if line.startswith('#'):
-            continue
-        l = line.strip().split()
-        ref_id, pos_1, pos_2, cov, cn = l[:5]
-        if int(float(cn)) > 0: 
-            cn_cov = int(float(cov)) / int(float(cn))
-            cn1.append(cn_cov)
-    cn1_cov = int(np.median(cn1)) *0.75
-   
-    svls = defaultdict(list)
-    svss = defaultdict(list)
-    for sv in svs:
-        if sv.supp < cn1_cov:
-            continue
-        svss[sv.bp_1] = sv
-        svss[sv.bp_2] = sv
-        svls[sv.bp_1[0]].append(sv.bp_1[1])
-        svls[sv.bp_2[0]].append(sv.bp_2[1])
-    for sv in svls.values():
-        sv.sort()
-    
-    covls = defaultdict(list)
-    for i, hp_file in enumerate([hp1_file, hp2_file]):
-        ploidy_hp = 0
-        len_cn = 0
-        f = open(hp_file)
-        posls = defaultdict(list)
-        for line in f:
-            loh = False
-            if line.startswith('#'):
-                continue
-            l = line.strip().split()
-            ref_id, pos_1, pos_2, cov, cn = l[:5]
-            pos_1, pos_2, cn = int(pos_1), int(pos_2), int(float(cn))
-            if i == 0:
-                sv1_st = bisect.bisect_right(svls[ref_id], pos_1 - POS_THR)
-                sv1_end = min(bisect.bisect_right(svls[ref_id], pos_1 + POS_THR), len(svls[ref_id])-1)
-                sv1 = [sv for sv in range(sv1_st, sv1_end + 1) if abs(svls[ref_id][sv] - pos_1) < POS_THR]
-            if not ref_id in covls.keys():
-                covls[ref_id] = [[],[],[],[]]
-            covls[ref_id][0].append(pos_1)
-            covls[ref_id][i+1].append(cn)
-            covls[ref_id][3].append(sv1)
-            
-    for ref_id, values in covls.items():
-        for ind, (cn1, cn2) in enumerate(zip(values[1], values[2])):
-            if ind == 0:
-                continue
-            if not values[3][ind]:
-                values[1][ind] = values[1][ind-1]
-                values[2][ind] = values[2][ind-1]
+            hp1ls[ref_id]= [[hp1],[pos_1]]
+            hp2ls[ref_id] = [[hp2],[pos_1]]
+        if hp1 == 0 or hp2 == 0:
+            if ref_id in LOH.keys():
+                LOH[ref_id][0].append(pos_1)
+                LOH[ref_id][1].append(pos_1)
             else:
-                if values[1][ind] == values[1][ind-1] and values[2][ind] == values[2][ind-1]:
-                    values[3][ind] = []
-                elif values[1][ind] == values[1][ind-1]:
-                    values[3][ind].append(2)
-                elif values[2][ind] == values[2][ind-1]:
-                    values[3][ind].append(1)
-                else:
-                    hp = [svss[(ref_id, svls[ref_id][sv])].hp1 for sv in values[3][ind]] + [svss[(ref_id, svls[ref_id][sv])].hp2 for sv in values[3][ind]]
-                    if 1 in hp and 2 in hp:
-                        print((ref_id, values[0][ind]))
-                        print([(ref_id, svls[ref_id][sv]) for sv in values[3][ind]] + [svss[(ref_id, svls[ref_id][sv])].hp2 for sv in values[3][ind]])
-                       
-                    
-                    
-                    
-                    
-                
-                
-                 
-              
-            
-            
-                
-        
-        
-            
+                LOH[ref_id]= [[pos_1],[pos_2]]
 
-    for i, hp_file in enumerate([hp1_file, hp2_file]):
+    cn1_cov = int(np.median(cov1)) *0.75
+    
+    for hp, hpls in enumerate([hp1ls, hp2ls]):
         ploidy_hp = 0
         len_cn = 0
-        f = open(hp_file)
-        posls = defaultdict(list)
-        for line in f:
+        for ref, values in hpls.items():
+            cnls = values[0]
+            posls = values[1]
             loh = False
-            if line.startswith('#'):
-                continue
-            l = line.strip().split()
-            ref_id, pos_1, pos_2, cov, cn = l[:5]
-            pos_1, pos_2, cn = int(pos_1), int(pos_2), int(float(cn))
-            if cn == 1:
-                cn1.append(int(float(cov)))
-            if posls[ref_id] and posls[ref_id][-1][2] == cn:
-                posls[ref_id][-1][1] = pos_2
-            else:
-                posls[ref_id].append([pos_1, pos_2, cn])
-        for ref_id, poss in posls.items():
-            for pos_1, pos_2, cn in poss:
+            for i, (pos_1, pos_2) in enumerate(zip(posls[:-1], posls[1:])):
+                cn = cnls[i]
                 ls1 = [(ref_id, pos_1),(ref_id, pos_1+1),(ref_id, pos_1-1)]
-                sv1 = [sv for sv in svs if sv.bp_1 in ls1 and sv.direction_1 == '-' or sv.bp_2 in ls1 and sv.direction_2 == '-' ]
+                sv1 = [sv for sv in svs if sv.bp_1 in ls1 and sv.direction_1 == '-' or sv.bp_2 in ls1 and sv.direction_2 == '-']
                 sv1 = sv1[0] if sv1 else ''
                 ls2 = [(ref_id, pos_2),(ref_id, pos_2+1),(ref_id, pos_2-1)]
                 sv2 = [sv for sv in svs if sv.bp_1 in ls2 and sv.direction_1 == '+' or sv.bp_2 in ls2 and sv.direction_2 == '+' ]
                 sv2 = sv2[0] if sv2 else ''
                 if ref_id in LOH.keys() and  pos_1 in LOH[ref_id][0]:
                     loh = True
-                CNAs[(ref_id, i+1)].append(CNA(ref_id, pos_1, pos_2, cn, i+1, loh, sv1, sv2))
+                CNAs[(ref_id, hp+1)].append(CNA(ref_id, pos_1, pos_2, cn, hp+1, loh, sv1, sv2))
                 len_cn += (pos_2 - pos_1)
                 ploidy_hp += cn * (pos_2 - pos_1)
-        ploidy.append(round(ploidy_hp/len_cn))
+        ploidy.append(round(ploidy_hp/len_cn))     
+
     check_hp_svs(CNAs)
     for (ref,hp), cnas in CNAs.items():
         pl = ploidy[hp-1]
@@ -289,7 +210,6 @@ def get_CNA(hp1_file, hp2_file, loh_file, svs):
                 cna.dir1 = 'AMP'
             elif cna.cn < pl:
                 cna.dir1 = 'DEL'
-    cn1_cov = int(np.median(cn1))
     check_cn_altering_svs(svs, cn1_cov)
     return(CNAs, ploidy)
 
@@ -577,7 +497,7 @@ def get_microhomology(svs, ref):
             t = 0
             seq = []
             tt+=1
-    
+
 def get_align(svls):
     MAPQ_THR = 45
     aln_file = pysam.AlignmentFile('temp_ins.bam', "rb")
@@ -661,12 +581,14 @@ def output_genes(by_gene, out_dir):
 
 
 def annotate_things(args):
-    hp1_file, hp2_file, loh_file, vcf_file, t, ref, out_dir = args.hp1_file, args.hp2_file, args.loh_file, args.vcf_file, args.threads, args.ref, args.out_dir
+    cna_vcf, vcf_file, t, ref, out_dir = args.cna_vcf, args.vcf_file, args.threads, args.ref, args.out_dir
     by_gene = defaultdict(list)
-    svs = get_bps(vcf_file)
-    cnas, ploidy = get_CNA(hp1_file, hp2_file, loh_file, svs)
     (genes, exon_pos) = get_genes(args.gff_file)
-    annot_CNAs(genes, cnas, ploidy, by_gene)
+    svs = get_bps(vcf_file)
+    cnas = []
+    if cna_vcf:
+        cnas, ploidy = get_CNA(cna_vcf, svs)
+        annot_CNAs(genes, cnas, ploidy, by_gene)
     annot_SVS(genes, exon_pos, svs, by_gene)
     annot_ins(svs, ref,t, args.rm_bed, args.specie)
     get_microhomology(svs, ref)
