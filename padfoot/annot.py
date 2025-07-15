@@ -15,11 +15,12 @@ from Bio import Align
 import copy
 import shutil
 import numpy as np
+import pandas as pd
 
 class SV(object):
     __slots__ = ("bp_1", "direction_1", "bp_2", "direction_2", "supp",'supp_read_ids', 'has_ins', 'sv_type','vaf','loh', 'prec',\
                  'vcf_id', 'is_single', 'vntr', 'cluster_id', 'detailed_type', 'ins_seq', 'genes', 'repeat', 'microh', 'ins_align',\
-                     'telomere', 'repeat_bp', 'cn_assigned', 'cn_altering', 'hp1', 'hp2')
+                     'telomere', 'repeat_bp', 'cn_assigned', 'cn_altering', 'hp1', 'hp2', 'score', 'cancer', 'impact')
     def __init__(self, bp_1, direction_1, bp_2, direction_2, supp, has_ins, sv_type,vaf, vcf_id, is_single, vntr, ins_seq, cluster_id, detailed_type, hp1, hp2):
         self.bp_1 = bp_1
         self.bp_2 = bp_2
@@ -48,6 +49,9 @@ class SV(object):
         self.repeat_bp = ['', '']
         self.cn_assigned  = ''
         self.cn_altering = False
+        self.score = 0
+        self.cancer = [' ',' ']
+        self.impact = ' '
         
     def get_jun(self):
          f1 = 'T' if self.direction_1 == '-' else 'H'
@@ -74,7 +78,17 @@ class SV(object):
 
         st = self.direction_1 + self.direction_2
         return '\t'.join([self.vcf_id, self.bp_1[0], str(self.bp_1[1]), self.bp_2[0], str(self.bp_2[1]), str(self.supp),\
-         str(round(self.vaf, 3)), st, gene1,self.repeat_bp[0], gene2, self.repeat_bp[1], typ, microh, str(self.vntr), tel, ins_al, rep])
+         str(round(self.vaf, 3)), st, str(self.score), self.impact, self.cancer[0], gene1,  self.repeat_bp[0], self.cancer[1], gene2, self.repeat_bp[1], typ, microh, str(self.vntr), tel, ins_al, rep])
+
+    def to_sum(self):
+        if self.bp_1[0] == self.bp_2[0]:
+            pos = self.bp_1[0] + ':' + str(self.bp_1[1]) + '-' + str(self.bp_2[1])
+        else:
+            pos = self.bp_1[0] + ':' + str(self.bp_1[1]) + '-' + self.bp_2[0] + ':' + str(self.bp_2[1])
+        fus = ''
+        if self.genes[2] in ['possible_fusion', 'oncogenic_fusion']:
+            fus = ',' + self.genes[0][0]+ '::'+ self.genes[1][0]
+        return self.impact +':' +'[' + self.vcf_id + ',' + pos + fus + ','+ self.genes[2] +']'
             
 class CNA(object):
     __slots__ = ("ref_id", "pos_1", "pos_2", "cn", "haplotype",'LOH', 'sv1', 'sv2', 'genes', 'dir1')
@@ -88,10 +102,39 @@ class CNA(object):
         self.sv1 = sv1
         self.sv2 = sv2
         self.genes = []
-        self.dir1 = ''
+        self.dir1 = 'NEUT'
     def get_name(self):
         return 'HP' + str(self.haplotype) +':' + self.ref_id + ':' + str(self.pos_1) + '-' + str(self.pos_2)
-    
+
+class Gene(object):
+    __slots__ = ("ref_id", "pos_1", "pos_2", "Gene_symbol", "CN", 'SV', 'score', 'cancer', 'impact', 'CN_impact')
+    def __init__(self, ref_id, pos_1, pos_2, Gene_symbol):
+        self.ref_id = ref_id
+        self.pos_1 = pos_1
+        self.pos_2 = pos_2
+        self.Gene_symbol = Gene_symbol
+        self.CN = [0,0]
+        self.SV = []
+        self.score = [0, 0, 0]
+        self.cancer = ''
+        self.impact = ['','','']
+        self.CN_impact = ['','']
+    def to_str(self):
+        pos = self.ref_id + ':' + str(self.pos_1) + '-' + str(self.pos_2)
+        sv_inf = [[],[],[]]
+        sv_info = []
+        for sv, bp in self.SV:
+            hp = sv.hp1 if bp == 1 else sv.hp2
+            sv_inf[hp].append(sv.to_sum())
+        for svs in sv_inf:
+            if svs:
+                svs= list(set(svs))
+                svs.sort()
+                sv_info.append(','.join(svs))
+            else:
+                sv_info.append('')
+        return '\t'.join([self.Gene_symbol, pos, str(sum(self.score)), self.cancer, self.CN_impact[0],str(self.CN[0]),self.impact[1], sv_info[1],  self.CN_impact[1],str(self.CN[1]),self.impact[2], sv_info[2], self.impact[0], sv_info[0]])
+
 def get_bps(vcf_file):
     svs = defaultdict(list)
     vcf = pysam.VariantFile(vcf_file)
@@ -152,10 +195,10 @@ def get_CNA(cna_vcf, svs):
     hp1ls = defaultdict(list)
     hp2ls = defaultdict(list)
     LOH  = defaultdict(list)
+    THR=0
     CNAs = defaultdict(list)
     ploidy = []
     cov1 = []
-    
     for var in vcf:
         ref_id, pos_1, pos_2 = var.chrom, var.pos, var.stop
         hp1, hp2 = var.samples['Sample']['CN1'], var.samples['Sample']['CN2']
@@ -163,18 +206,34 @@ def get_CNA(cna_vcf, svs):
             cov1.append( var.samples['Sample']['COV1']/hp1)
         if ref_id in hp1ls:
             if not hp1ls[ref_id][0][-1] == hp1:
+                if abs(hp1ls[ref_id][2][-1] - pos_1) > THR:
+                    hp1ls[ref_id][0].append(1)
+                    hp1ls[ref_id][1].append(hp1ls[ref_id][2][-1]+1)
+                    hp1ls[ref_id][2].append(pos_1-1)
+                pos_1 = pos_1 if pos_1 > hp1ls[ref_id][2][-1] else pos_1 + 1
                 hp1ls[ref_id][0].append(hp1)
                 hp1ls[ref_id][1].append(pos_1)
+                hp1ls[ref_id][2].append(pos_2)
+            else:
+                hp1ls[ref_id][2][-1] = pos_2
             if not hp2ls[ref_id][0][-1] == hp2:
+                if abs(hp2ls[ref_id][2][-1] - pos_1) > THR:
+                    hp2ls[ref_id][0].append(1)
+                    hp2ls[ref_id][1].append(hp2ls[ref_id][2][-1]+1)
+                    hp2ls[ref_id][2].append(pos_1-1)
+                pos_1 = pos_1 if pos_1 > hp2ls[ref_id][2][-1] else pos_1 + 1
                 hp2ls[ref_id][0].append(hp2)
                 hp2ls[ref_id][1].append(pos_1)
+                hp2ls[ref_id][2].append(pos_2)
+            else:
+                hp2ls[ref_id][2][-1] = pos_2
         else:
-            hp1ls[ref_id]= [[hp1],[pos_1]]
-            hp2ls[ref_id] = [[hp2],[pos_1]]
+            hp1ls[ref_id]= [[hp1],[pos_1],[pos_2]]
+            hp2ls[ref_id] = [[hp2],[pos_1], [pos_2]]
         if hp1 == 0 or hp2 == 0:
             if ref_id in LOH.keys():
                 LOH[ref_id][0].append(pos_1)
-                LOH[ref_id][1].append(pos_1)
+                LOH[ref_id][1].append(pos_2)
             else:
                 LOH[ref_id]= [[pos_1],[pos_2]]
 
@@ -183,11 +242,9 @@ def get_CNA(cna_vcf, svs):
     for hp, hpls in enumerate([hp1ls, hp2ls]):
         ploidy_hp = 0
         len_cn = 0
-        for ref, values in hpls.items():
-            cnls = values[0]
-            posls = values[1]
+        for ref_id, (cnls, pos1ls, pos2ls) in hpls.items():
             loh = False
-            for i, (pos_1, pos_2) in enumerate(zip(posls[:-1], posls[1:])):
+            for i, (pos_1, pos_2) in enumerate(zip(pos1ls, pos2ls)):
                 cn = cnls[i]
                 ls1 = [(ref_id, pos_1),(ref_id, pos_1+1),(ref_id, pos_1-1)]
                 sv1 = [sv for sv in svs if sv.bp_1 in ls1 and sv.direction_1 == '-' or sv.bp_2 in ls1 and sv.direction_2 == '-']
@@ -301,7 +358,7 @@ def get_genes(gff_file):
         exons[0] = sorted(exons[0])
     return (genes, exon_pos)
 
-def annotBPs(sv, bp_1, genes, exon_pos):
+def annotBPs(sv, bp_1, genes, exon_pos, by_gene, bp):
     if not bp_1[0] in list(genes.keys()) and not 'chr' + bp_1[0] in list(genes.keys()):
         sv.genes.append(())
     else:
@@ -323,47 +380,67 @@ def annotBPs(sv, bp_1, genes, exon_pos):
                 else:
                     ty = exons[2][ind1a - 1]
             sv.genes.append((genels[0][ind2], ty, exons[3][0]))
+            add_gene(by_gene, genels[0][ind2], bp_1[0], genels[1][ind2], genels[2][ind2])
+            by_gene[genels[0][ind2]].SV.append((sv, bp))
         else:
             sv.genes.append(())
             
 def annot_SVS(genes, exon_pos, svs, by_gene):
     for sv in svs:
-        annotBPs(sv, sv.bp_1, genes, exon_pos)
-        annotBPs(sv, sv.bp_2, genes, exon_pos)
+        annotBPs(sv, sv.bp_1, genes, exon_pos, by_gene,1)
+        annotBPs(sv, sv.bp_2, genes, exon_pos, by_gene,2)
     for sv in svs:
         if not sv.genes[1] and not sv.genes[0]:
             sv.genes.append('')
             continue
         if not sv.genes[1] or not sv.genes[0]:
             sv.genes.append('Gene-NonCoding')
+            sv.score += 2
+            sv.impact = 'LOW'
             continue
         if sv.genes[0] == sv.genes[1]:
-            by_gene[sv.genes[0][0]].append(sv)
             if 'exon'  in sv.genes[0][1]:
                 svlen = sv.bp_2[1] - sv.bp_1[1]
                 if svlen // 3:
                     sv.genes.append('frameshift')
+                    sv.score += 3
+                    sv.impact = 'HIGH'
                 else:
                     sv.genes.append('withinexon')
+                    sv.score += 3
+                    sv.impact = 'HIGH'
             elif 'intron' in sv.genes[0][1]:
                 sv.genes.append('intronic')
+                sv.score += 1
+                sv.impact = 'LOW'
             else:
                 sv.genes.append('promoter/UTR')
+                sv.score += 1
+                sv.impact = 'LOW'
         else:
             if sv.genes[0][0] == sv.genes[1][0]:
-                by_gene[sv.genes[0][0]].append(sv)
                 if not sv.genes[0][1] == sv.genes[1][1]:
                     sv.genes.append('between_exons')
+                    sv.score += 3
+                    sv.impact = 'HIGH'
             elif not sv.genes[0][0] == sv.genes[1][0]:
-                by_gene[sv.genes[0][0]].append(sv)
-                by_gene[sv.genes[1][0]].append(sv)
                 if sv.direction_1 == sv.direction_2 and not sv.genes[0][2] == sv.genes[1][2]:
                     sv.genes.append('possible_fusion')
+                    sv.score += 3
+                    sv.impact = 'HIGH'
                 elif not sv.direction_1 == sv.direction_2 and sv.genes[0][2] == sv.genes[1][2]:
                     sv.genes.append('possible_fusion')
+                    sv.score += 3
+                    sv.impact = 'HIGH'
                 else:
                     sv.genes.append('between_genes')
+                    sv.score += 2
+                    sv.impact = 'LOW'
                     
+def add_gene(by_gene, gene, ref_id, pos1, pos2):
+    if not gene in by_gene.keys():
+        by_gene[gene] = Gene(ref_id, pos1, pos2, gene)
+
 def annot_CNAs(genes, cnas, ploidy, by_gene):
     hps = [1,2]
     for ref_id, genels in genes.items():
@@ -377,18 +454,17 @@ def annot_CNAs(genes, cnas, ploidy, by_gene):
             for i, gene in enumerate(genels[0]):
                 ind1 = bisect.bisect_right(cn_start, genels[1][i])
                 ind2 = bisect.bisect_left(cn_end, genels[2][i])
-                by_gene[gene].append(ref_id + ':' + str(genels[1][i]) + '-' + str(genels[2][i]))
+                add_gene(by_gene, gene, ref_id, genels[1][i], genels[2][i])
                 if not ind1 - ind2 == 1:
                     cn_prof[ind1-1].genes.append((gene, 'disturbed'))
-                    by_gene[gene].append(cn_prof[ind1-1])
                 elif cn[ind1-1] > ploidy[hp-1]:
                     cn_prof[ind1-1].genes.append(gene)
                     cn_prof[ind1-1].dir1 = 'AMP'
-                    by_gene[gene].append(cn_prof[ind1-1])
                 elif cn[ind1-1] < ploidy[hp-1]:
                     cn_prof[ind1-1].genes.append(gene)
                     cn_prof[ind1-1].dir1 = 'DEL'
-                    by_gene[gene].append(cn_prof[ind1-1])
+                by_gene[gene].CN_impact[hp-1] = cn_prof[ind1-1].dir1
+                by_gene[gene].CN[hp-1] = cn[ind1-1]
 
 def check_complexSV(cnas, svs):
     svls = defaultdict(list)
@@ -545,12 +621,87 @@ def annot_ins(svs, ref,t, rm_bed, specie):
     get_tel(svs)
     annot_bp_repeat(svls, rm_bed)
 
+def get_cancer_anno(sv, gene, cancer_genes):
+    if gene in ['between_exons','withinexon', 'frameshift']:
+        sv.score += 3
+        sv.impact = 'HIGH_ONCO'
+    elif gene in ['between_genes', 'Gene-NonCoding']:
+        sv.score += 2
+        sv.impact = 'HIGH_ONCO'
+    elif gene in ['intronic', 'promoter/UTR']:
+        sv.score += 1
+        sv.impact = 'MODERATE'
+    
+
+def cancer_annot_svs(svs, cancer_genes, fusion):
+    for sv in svs:
+        if not sv.genes[2]:
+            continue
+        if sv.genes[2] == 'possible_fusion':
+            if sv.genes[0][0] in fusion.keys():
+                if sv.genes[1][0] in fusion[sv.genes[1][0]]:
+                    sv.score += 3
+                    sv.impact = 'HIGH_ONCO'
+                    sv.genes[2] == 'oncogenic_fusion'
+        else:
+            if sv.genes[0] and sv.genes[0][0] in cancer_genes.keys():
+                sv.cancer[0] = cancer_genes[sv.genes[0][0]]
+                get_cancer_anno(sv, sv.genes[2], cancer_genes)
+            if sv.genes[1] and sv.genes[1][0] in cancer_genes.keys():
+                if sv.genes[0] and sv.genes[0][0] == sv.genes[1][0]:
+                    sv.cancer[1] = sv.cancer[0]
+                else:
+                    sv.cancer[1] = cancer_genes[sv.genes[1][0]]
+                    get_cancer_anno(sv, sv.genes[2], cancer_genes)
+
+def cancer_annot_genes(by_gene, cancer_genes):
+    for gene, gs in by_gene.items():
+        if gene in cancer_genes.keys():
+            gs.cancer = cancer_genes[gene]
+        if 'TSG' in gs.cancer:
+            for hp, cn in enumerate(gs.CN_impact):
+                if cn == 'DEL':
+                    gs.score[hp+1] += 3
+                    gs.impact[hp+1] = 'TSG_DEL'
+        elif 'oncogene' in gs.cancer:
+            for hp, cn in enumerate(gs.CN_impact):
+                if cn == 'AMP':
+                    gs.score[hp+1] += 3
+                    gs.impact[hp+1] = 'ONC_AMP' 
+        for (sv, bp) in gs.SV:
+            hp = sv.hp1 if bp == 1 else sv.hp2
+            if sv.genes[2] in ['between_exons','withinexon', 'frameshift']:
+                gs.score[hp] += 3
+                if not gs.impact[hp]:
+                    gs.impact[hp] = sv.impact
+            elif sv.genes[2] in ['between_genes', 'Gene-NonCoding']:
+                gs.score[hp] += 2
+                if not gs.impact[hp]:
+                    gs.impact[hp] = sv.impact
+            elif sv.genes[2] == 'oncogenic_fusion':
+                gs.score[hp] += 2
+                gs.impact[hp] = 'Oncogenic_fusion'
+                             
+def cancer_annot(svs, by_gene):
+
+    url = 'https://raw.githubusercontent.com/aysegokce/PadfootFiles/refs/heads/main/cancer_genes.tsv'
+    df = pd.read_csv(url, sep='\t')
+    cancer_genes = defaultdict(list)
+    fusion = defaultdict(list)
+    for index, row in df.iterrows():
+        if not pd.isna(row['fusion']):
+            fusion[row['Gene_symbol']] = row['fusion'].split(',')
+        if not pd.isna(row['Role_in_cancer']):    
+            cancer_genes[row['Gene_symbol']] = row['Role_in_cancer']
+    cancer_annot_svs(svs, cancer_genes, fusion)
+    cancer_annot_genes(by_gene, cancer_genes)
+
 def output_svs(svs, out_dir):
     fopen = open(out_dir + '/annotated_svs.tsv', 'w')
-    header = '\t'.join(['chr_1', 'pos_1', 'chr_2', 'pos_2', 'n_supp', 'vaf', 'strand',\
-                         'gene_name1', 'pos_1', 'strand_1', 'Repeat_Anno1',  'gene_name2', 'pos_2', \
-                             'strand_2', 'Repeat_Anno2', 'Type', 'Microhomology', 'VNTR', \
-                                 'Telomere_repeat', 'Aligned_pos(INS)', 'repeat_annot'])
+    header = '\t'.join(['SV ID', 'chr_1', 'pos_1', 'chr_2', 'pos_2', 'N_supp', 'Vaf', 'Strand','Score', 'Impact',\
+                         'Role in Cancer1', 'Gene Name1',  'Pos_1', 'Strand_1', 'Repeat_Anno1', 'Role in Cancer2', 'Gene Name2',  'Pos_2', \
+                             'Strand_2', 'Repeat_Anno2', 'Type', 'Microhomology', 'VNTR', \
+                                 'Telomere_repeat', 'Aligned_pos(INS)', 'Repeat_annot'])
     fopen.write(header)
     fopen.write('\n')
     for sv in svs:
@@ -560,22 +711,11 @@ def output_svs(svs, out_dir):
     
 def output_genes(by_gene, out_dir):
     f = open(out_dir + '/by_gene.tsv', 'w')
-    header = '\t'.join(['Gene Name','Gene Pos', 'HP1', 'HP1 CN', 'HP2', 'HP2 CN', 'SV'])
+    header = '\t'.join(['Gene Name','Gene Pos','Score','Role in Cancer', 'HP1', 'HP1 CN','HP1 Impact','HP1 SV', 'HP2', 'HP2 CN','HP2 Impact', 'HP2 SV', 'Unphased annot', 'Unphased SV'])
     f.write(header)
     f.write('\n')
     for gene, val in by_gene.items():
-        cnals = [v for v in val if type(v) is CNA]
-        svls = [v for v in val if type(v) is SV]
-        pos = [v for v in val if type(v is str)][0]
-        if not svls and not cnals:
-            continue
-        cna_ls = [' \t ', ' \t ']
-        sv_ls = []
-        for cna in cnals:
-            cna_ls[cna.haplotype-1] = cna.dir1 + '\t' + str(cna.cn)
-        for sv in svls:
-            sv_ls.append(sv.genes[-1])
-        f.write(gene + '\t' + pos + '\t'+ '\t'.join(cna_ls) + '\t' + ';'.join(sv_ls))
+        f.write(val.to_str())
         f.write('\n')
     f.close()
 
@@ -590,7 +730,9 @@ def annotate_things(args):
         cnas, ploidy = get_CNA(cna_vcf, svs)
         annot_CNAs(genes, cnas, ploidy, by_gene)
     annot_SVS(genes, exon_pos, svs, by_gene)
-    annot_ins(svs, ref,t, args.rm_bed, args.specie)
+    if args.specie == 'human':
+        cancer_annot(svs, by_gene)
+    annot_ins(svs, ref,t, args.rm_file, args.specie)
     get_microhomology(svs, ref)
     output_svs(svs, out_dir)
     output_genes(by_gene, out_dir)

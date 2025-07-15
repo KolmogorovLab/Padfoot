@@ -19,7 +19,7 @@ import logging
 
 from padfoot.annot import annotate_things
 from padfoot.preprocess import generate_gff, generate_rm
-from padfoot_cluster_cns import cluster_cn
+#from padfoot_cluster_cns import cluster_cn
 from padfoot.__version__ import __version__
 
 
@@ -69,8 +69,6 @@ def main():
     parser.add_argument("--ref", "-r", dest="ref",
                         metavar="path", required=True, default=None,
                         help="path to reference file")
-    parser.add_argument("-t", "--threads", dest="threads",
-                        default=8, metavar="int", type=int, help="number of parallel threads [8]")
     parser.add_argument("--out-dir", dest="out_dir",
                         default=None, required=True,
                         metavar="path", help="Output directory")
@@ -85,9 +83,10 @@ def main():
     parser.add_argument("-t", "--threads", dest="threads",
                         default=8, metavar="int", type=int, help="number of parallel threads [8]")
     parser.add_argument("--specie", dest="specie",
-                        default=None, help="Specie")
+                        default='human', help="Specie")
     args = parser.parse_args()
-    
+    beds = os.path.abspath(os.path.join(os.path.dirname( __file__ ), '..', 'beds'))
+    print(beds)
 
     temp_dir = args.out_dir+ '/temp'
     if not os.path.isdir(args.out_dir):
@@ -98,7 +97,7 @@ def main():
     
     os.chdir(args.out_dir+ '/temp')
     log_file = os.path.join(args.out_dir, "padfoot.log")
-    _enable_logging(log_file, debug=False, overwrite=True)
+    _enable_logging(log_file, debug=True, overwrite=True)
 
     logger.info("Starting Padfoot " + _version())
     logger.debug("Cmd: %s", " ".join(sys.argv))
@@ -119,12 +118,12 @@ def main():
     if not args.rm_file and not args.genome:
         logger.error('Error: Please provide a repeat masker bed file or select a genome [hg38, mm10, chm13]')
     if not args.rm_file and args.genome:
-        args.gff_file = 'beds/' + args.genome +'_rm.bed'
+        args.gff_file = beds +'/' + args.genome +'_rm.bed'
     
     if not args.new_gff and not args.genome:
         logger.error('Error: Please provide a gff file or select a genome [hg38, mm10, chm13]')
     if not args.new_gff and args.genome:
-        args.gff_file = 'beds/' + args.genome +'.gff3.gz'
+        args.gff_file = beds +'/' + args.genome +'.gff3.gz'
     
     if not args.genome and not args.specie:
         logger.error('Error: Please provide specie for repeat annotation')
@@ -132,6 +131,6 @@ def main():
     args.specie = 'mouse' if args.genome == 'mm10' else 'human'
     
     (genes, cnas, exon_pos, svs, by_gene) = annotate_things(args)
-    cluster_cn(cnas, args.out_dir)
+    #cluster_cn(cnas, args.out_dir)
     
 
