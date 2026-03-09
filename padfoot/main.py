@@ -86,31 +86,34 @@ def main():
                         default='human', help="Specie")
     args = parser.parse_args()
     beds = os.path.abspath(os.path.join(os.path.dirname( __file__ ), '..', 'beds'))
+    args.out_dir = os.path.abspath(args.out_dir)
+    args.vcf_file = os.path.abspath(args.vcf_file)
+    args.cna_vcf = os.path.abspath(args.cna_vcf)
     print(beds)
 
-    temp_dir = args.out_dir+ '/temp'
-    if not os.path.isdir(args.out_dir):
-        os.makedirs(temp_dir)
-        
-    if not  os.path.isdir(temp_dir):
-        os.makedirs(temp_dir)
-    
-    os.chdir(args.out_dir+ '/temp')
+    os.makedirs(args.out_dir, exist_ok=True)
+
+    # Create temp directory safely
+    temp_dir = os.path.join(args.out_dir, "temp")
+    os.makedirs(temp_dir, exist_ok=True)
+
+    os.chdir(temp_dir)
+
     log_file = os.path.join(args.out_dir, "padfoot.log")
     _enable_logging(log_file, debug=True, overwrite=True)
-
+        
     logger.info("Starting Padfoot " + _version())
     logger.debug("Cmd: %s", " ".join(sys.argv))
     logger.debug("Python version: " + sys.version)
 
     if args.new_gff:
-        gff_path = args.out_dir+ 'gff_file.gff3'
+        gff_path = os.path.join(args.out_dir, 'gff_file.gff3')
         logger.debug("Generating new gff file: " + gff_path)
         generate_gff(args.new_gff, gff_path)
         args.gff_file = gff_path
     
     if args.rm_file:
-        rm_path = args.out_dir+ 'rm.bed'
+        rm_path = os.path.join(args.out_dir, 'rm.bed')
         logger.debug("Generating new rm file: " + rm_path)
         generate_rm(args.rm_file, rm_path)
         args.rm_file = rm_path
@@ -118,7 +121,7 @@ def main():
     if not args.rm_file and not args.genome:
         logger.error('Error: Please provide a repeat masker bed file or select a genome [hg38, mm10, chm13]')
     if not args.rm_file and args.genome:
-        args.gff_file = beds +'/' + args.genome +'_rm.bed'
+        args.rm_file = beds +'/' + args.genome +'_rm.bed.gz'
     
     if not args.new_gff and not args.genome:
         logger.error('Error: Please provide a gff file or select a genome [hg38, mm10, chm13]')

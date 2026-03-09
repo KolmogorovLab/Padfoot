@@ -8,6 +8,7 @@ Created on Mon Mar 17 14:30:38 2025
 
 import pysam
 from collections import defaultdict, Counter
+from typing import Dict, List, Tuple
 import bisect
 import subprocess
 import gzip
@@ -155,8 +156,9 @@ def get_bps(vcf_file):
         sv_type = var.info['SVTYPE']
         vcf_id = var.id
         hp1 = hp2 = 0
+        bp_2 = bp_1
         if 'HP' in var.info.keys():
-            hp1 = hp2 = var.info['HP']
+            hp1, hp2 = [int(h) for h in var.info['HP'].split('|')]
         
         if var.info['SVTYPE'] == 'sBND':
             chr2 = var.chrom
@@ -190,6 +192,86 @@ def get_bps(vcf_file):
         svs[vcf_id]=(SV(bp_1, dir1, bp_2, dir2, supp, has_ins, sv_type,vaf, vcf_id, is_single, vntr,ins_seq, cluster_id, detailed_type, hp1, hp2))
     return list(svs.values())
 
+def fill_missing_segments_cn1(
+    chr_lens: Dict[str, int],
+    hp1ls: Dict[str, List[List[int]]],
+    default_cn: float = 1.0,
+    assume_1based_inclusive: bool = True,
+):
+    hp1ls_filled: Dict[str, List[List[int]]] = {}
+    for chrom , L in chr_lens.items():
+        L = int(L)
+        if assume_1based_inclusive:
+            span_start, span_end = 1, L
+        else:
+            span_start, span_end = 0, L 
+        if chrom not in hp1ls or len(hp1ls[chrom]) != 3 or len(hp1ls[chrom][0]) == 0:
+            if assume_1based_inclusive:
+                hp1ls_filled[chrom] = [[default_cn], [span_start], [span_end]]
+            else:
+                hp1ls_filled[chrom] = [[default_cn], [span_start], [span_end]]
+            continue
+        cn_list, s_list, e_list = hp1ls[chrom]
+        segs = sorted(
+            [(float(cn_list[i]), int(s_list[i]), int(e_list[i])) for i in range(len(cn_list))],
+            key=lambda x: (x[1], x[2]),
+        )
+        clamped = []
+        for cn, s, e in segs:
+            if assume_1based_inclusive:
+                s = max(s, span_start)
+                e = min(e, span_end)
+                if s <= e:
+                    clamped.append((cn, s, e))
+            else:
+                s = max(s, span_start)
+                e = min(e, span_end)
+                if s < e:
+                    clamped.append((cn, s, e))
+        merged = []
+        for cn, s, e in clamped:
+            if not merged:
+                merged.append([cn, s, e])
+                continue
+            pcn, ps, pe = merged[-1]
+            if assume_1based_inclusive:
+                overlap_or_touch = s <= pe + 1
+            else:
+                overlap_or_touch = s <= pe  # [ps,pe) touches when s==pe
+            if overlap_or_touch:
+                merged[-1][2] = max(pe, e)
+            else:
+                merged.append([cn, s, e])
+        out_cn, out_s, out_e = [], [], []
+        cur = span_start
+        for cn, s, e in merged:
+            if assume_1based_inclusive:
+                if cur < s:
+                    out_cn.append(default_cn)
+                    out_s.append(cur)
+                    out_e.append(s - 1)
+                out_cn.append(cn); out_s.append(s); out_e.append(e)
+                cur = e + 1
+            else:
+                if cur < s:
+                    out_cn.append(default_cn)
+                    out_s.append(cur)
+                    out_e.append(s)
+                out_cn.append(cn); out_s.append(s); out_e.append(e)
+                cur = e
+        if assume_1based_inclusive:
+            if cur <= span_end:
+                out_cn.append(default_cn)
+                out_s.append(cur)
+                out_e.append(span_end)
+        else:
+            if cur < span_end:
+                out_cn.append(default_cn)
+                out_s.append(cur)
+                out_e.append(span_end)
+        hp1ls_filled[chrom] = [out_cn, out_s, out_e]
+    return hp1ls_filled
+
 def get_CNA(cna_vcf, svs):
     vcf = pysam.VariantFile(cna_vcf)
     hp1ls = defaultdict(list)
@@ -199,6 +281,9 @@ def get_CNA(cna_vcf, svs):
     CNAs = defaultdict(list)
     ploidy = []
     cov1 = []
+    chrs = vcf.header.contigs.keys()
+    chr_lens = [x.length for x in vcf.header.contigs.values() ]
+    chr_lens = dict(zip(chrs, chr_lens))
     for var in vcf:
         ref_id, pos_1, pos_2 = var.chrom, var.pos, var.stop
         hp1, hp2 = var.samples['Sample']['CN1'], var.samples['Sample']['CN2']
@@ -238,7 +323,8 @@ def get_CNA(cna_vcf, svs):
                 LOH[ref_id]= [[pos_1],[pos_2]]
 
     cn1_cov = int(np.median(cov1)) *0.75
-    
+    hp1ls = fill_missing_segments_cn1(chr_lens, hp1ls)
+    hp2ls = fill_missing_segments_cn1(chr_lens, hp2ls)
     for hp, hpls in enumerate([hp1ls, hp2ls]):
         ploidy_hp = 0
         len_cn = 0
@@ -406,7 +492,7 @@ def annot_SVS(genes, exon_pos, svs, by_gene):
                     sv.score += 3
                     sv.impact = 'HIGH'
                 else:
-                    sv.genes.append('withinexon')
+                    sv.genes.append('exon_altering')
                     sv.score += 3
                     sv.impact = 'HIGH'
             elif 'intron' in sv.genes[0][1]:
@@ -620,9 +706,10 @@ def annot_ins(svs, ref,t, rm_bed, specie):
     get_align(svls)
     get_tel(svs)
     annot_bp_repeat(svls, rm_bed)
-
+    
+    
 def get_cancer_anno(sv, gene, cancer_genes):
-    if gene in ['between_exons','withinexon', 'frameshift']:
+    if gene in ['between_exons','exon_altering', 'frameshift']:
         sv.score += 3
         sv.impact = 'HIGH_ONCO'
     elif gene in ['between_genes', 'Gene-NonCoding']:
@@ -670,7 +757,7 @@ def cancer_annot_genes(by_gene, cancer_genes):
                     gs.impact[hp+1] = 'ONC_AMP' 
         for (sv, bp) in gs.SV:
             hp = sv.hp1 if bp == 1 else sv.hp2
-            if sv.genes[2] in ['between_exons','withinexon', 'frameshift']:
+            if sv.genes[2] in ['between_exons','exon_altering', 'frameshift']:
                 gs.score[hp] += 3
                 if not gs.impact[hp]:
                     gs.impact[hp] = sv.impact
