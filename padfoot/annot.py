@@ -8,15 +8,18 @@ Created on Mon Mar 17 14:30:38 2025
 
 import pysam
 from collections import defaultdict, Counter
-from typing import Dict, List, Tuple
+from typing import Dict, List
 import bisect
 import subprocess
 import gzip
 from Bio import Align
+import os
 import copy
-import shutil
 import numpy as np
 import pandas as pd
+import logging
+
+logger = logging.getLogger()
 
 class SV(object):
     __slots__ = ("bp_1", "direction_1", "bp_2", "direction_2", "supp",'supp_read_ids', 'has_ins', 'sv_type','vaf','loh', 'prec',\
@@ -24,8 +27,8 @@ class SV(object):
                      'telomere', 'repeat_bp', 'cn_assigned', 'cn_altering', 'hp1', 'hp2', 'score', 'cancer', 'impact')
     def __init__(self, bp_1, direction_1, bp_2, direction_2, supp, has_ins, sv_type,vaf, vcf_id, is_single, vntr, ins_seq, cluster_id, detailed_type, hp1, hp2):
         self.bp_1 = bp_1
-        self.bp_2 = bp_2
         self.direction_1 = direction_1
+        self.bp_2 = bp_2
         self.direction_2 = direction_2
         self.supp = supp
         self.supp_read_ids = ''
@@ -561,7 +564,7 @@ def run_command(cmd):
     p = subprocess.Popen(cmd, shell= True)
     p.wait()
 
-def write_ins(svs, ref, t, specie):
+def write_ins(svs, ref, t, specie, run_repeatmasker):
     fa_out = open('temp_ins.fa', 'w')
     for sv in svs:
         if sv.ins_seq:
@@ -573,13 +576,18 @@ def write_ins(svs, ref, t, specie):
             fa_out.write(sv.has_ins)
             fa_out.write('\n')
     fa_out.close()
-    run_command(f"RepeatMasker -species {specie} temp_ins.fa")
+    if run_repeatmasker:
+        run_command(f"RepeatMasker -species {specie} temp_ins.fa")
     run_command(f"minimap2 -ax map-ont {ref} temp_ins.fa -k 17 -y -K 5G -t {t} --eqx | samtools sort -@ {t} -m 4G > temp_ins.bam")
     run_command(f"samtools index -@ {t} temp_ins.bam")
     
 
 def get_repeat(svls):
-    rep_file = open('temp_ins.fa.out', 'r')
+    if os.path.exists('temp_ins.fa.out'):
+        rep_file = open('temp_ins.fa.out', 'r')
+    else:
+        logger.warning("RepeatMasker output file not found: %s. RepeatMasker may have failed.")
+        return ''
     reps = defaultdict(int)
     svrep = defaultdict(list)
     sv_id = ''
@@ -697,11 +705,11 @@ def annot_bp_repeat(svls, rm_bed):
         ind = 0 if l[4] == 'BP1' else 1
         svls[l[3]].repeat_bp[ind] = l[-1]
         
-def annot_ins(svs, ref,t, rm_bed, specie):
+def annot_ins(svs, ref,t, rm_bed, specie, run_repeatmasker):
     svls = defaultdict(list)
     for sv in svs:
          svls[sv.vcf_id] = sv
-    write_ins(svs, ref, t, specie)
+    write_ins(svs, ref, t, specie, run_repeatmasker)
     get_repeat(svls)
     get_align(svls)
     get_tel(svs)
@@ -819,7 +827,7 @@ def annotate_things(args):
     annot_SVS(genes, exon_pos, svs, by_gene)
     if args.specie == 'human':
         cancer_annot(svs, by_gene)
-    annot_ins(svs, ref,t, args.rm_file, args.specie)
+    annot_ins(svs, ref,t, args.rm_file, args.specie, args.run_repeatmasker)
     get_microhomology(svs, ref)
     output_svs(svs, out_dir)
     output_genes(by_gene, out_dir)

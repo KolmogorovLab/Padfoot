@@ -1,0 +1,16 @@
+name: Padfoot
+channels:
+  - conda-forge
+  - bioconda
+  - defaults
+dependencies:
+  - python=>3.11
+  - numpy
+  - pandas
+  - pysam
+  - biopython
+  - samtools
+  - minimap2
+  - repeatmasker
+  - pip
+  - bedtools
