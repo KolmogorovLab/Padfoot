@@ -280,7 +280,7 @@ def get_CNA(cna_vcf, svs):
     hp1ls = defaultdict(list)
     hp2ls = defaultdict(list)
     LOH  = defaultdict(list)
-    THR=0
+    THR=1
     CNAs = defaultdict(list)
     ploidy = []
     cov1 = []
@@ -326,8 +326,8 @@ def get_CNA(cna_vcf, svs):
                 LOH[ref_id]= [[pos_1],[pos_2]]
 
     cn1_cov = int(np.median(cov1)) *0.75
-    hp1ls = fill_missing_segments_cn1(chr_lens, hp1ls)
-    hp2ls = fill_missing_segments_cn1(chr_lens, hp2ls)
+    #hp1ls = fill_missing_segments_cn1(chr_lens, hp1ls)
+    #hp2ls = fill_missing_segments_cn1(chr_lens, hp2ls)
     for hp, hpls in enumerate([hp1ls, hp2ls]):
         ploidy_hp = 0
         len_cn = 0
