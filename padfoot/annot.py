@@ -647,8 +647,8 @@ def get_microhomology(svs, ref):
         if sv.sv_type == 'INS':
             continue
         bpls.append(sv)
-        run_command(f'samtools faidx {ref} {sv.bp_1[0]}:{max(0, sv.bp_1[1]-THR)}-{sv.bp_1[1]+THR} >> temp_bpseq.tsv')
-        run_command(f'samtools faidx {ref} {sv.bp_2[0]}:{max(0, sv.bp_2[1]-THR)}-{sv.bp_2[1]+THR} >> temp_bpseq.tsv')
+        run_command(f'samtools faidx {ref} \'{sv.bp_1[0]}:{max(0, sv.bp_1[1]-THR)}-{sv.bp_1[1]+THR}\' >> temp_bpseq.tsv')
+        run_command(f'samtools faidx {ref} \'{sv.bp_2[0]}:{max(0, sv.bp_2[1]-THR)}-{sv.bp_2[1]+THR}\' >> temp_bpseq.tsv')
     
     f.close()
   
