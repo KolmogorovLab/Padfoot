@@ -68,19 +68,20 @@ def write_vcf(path, records):
             info.append(f"DETAILED_TYPE={r['detailed_type']}")
         if r.get("vntr"):
             info.append("INSIDE_VNTR=TRUE")
-        hp = r.get("hp", "0|0")
+        hp = r.get("hp", "0|0")                         # None: no HP field (unphased in Severus)
         cluster = [f"CLUSTERID={r['cluster']}"] if "cluster" in r else []
 
         if svtype == "BND":
             mchrom, mpos = r["mate"]
-            h1, h2 = hp.split("|")
+            hp1 = [f"HP={hp}"] if hp else []
+            hp2 = ["HP={1}|{0}".format(*hp.split("|"))] if hp else []
             lines.append(_line(r["chrom"], r["pos"], r["id"] + "_1", _bnd_alt(strands, r["mate"]),
-                               info + [f"MATE_ID={r['id']}_2", f"HP={hp}"] + cluster, vaf, dv))
+                               info + [f"MATE_ID={r['id']}_2"] + hp1 + cluster, vaf, dv))
             lines.append(_line(mchrom, mpos, r["id"] + "_2", _bnd_alt(strands, (r["chrom"], r["pos"])),
-                               info + [f"MATE_ID={r['id']}_1", f"HP={h2}|{h1}"] + cluster, vaf, dv))
+                               info + [f"MATE_ID={r['id']}_1"] + hp2 + cluster, vaf, dv))
         else:
             alt = r.get("alt", "N" if svtype == "sBND" else f"<{svtype}>")
-            lines.append(_line(r["chrom"], r["pos"], r["id"], alt, info + [f"HP={hp}"] + cluster, vaf, dv))
+            lines.append(_line(r["chrom"], r["pos"], r["id"], alt, info + ([f"HP={hp}"] if hp else []) + cluster, vaf, dv))
 
     with open(path, "w") as f:
         f.write(HEADER)

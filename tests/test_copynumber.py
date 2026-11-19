@@ -213,10 +213,11 @@ def test_by_gene_cn(toy_annotation, tmp_path):
     profile = read_wakhan_profile(str(write_profile(tmp_path / "integer_profile.bed", TOY_ROWS)))
     by_gene = defaultdict(list)
     annot.annot_gene_cn(toy_annotation, profile, by_gene)
-    assert set(by_gene) == {g.name for g in toy_annotation.genes}
-    assert by_gene["GENEB"].cn.status == "HOMDEL"
-    assert by_gene["GENED"].cn.status == "GAIN"
-    assert by_gene["GENEA"].cn.status == "NEUTRAL"
+    assert set(by_gene) == {g.key for g in toy_annotation.genes}
+    rows = {r.Gene_symbol: r for r in by_gene.values()}
+    assert rows["GENEB"].cn.status == "HOMDEL"
+    assert rows["GENED"].cn.status == "GAIN"
+    assert rows["GENEA"].cn.status == "NEUTRAL"
     annot.output_genes(by_gene, str(tmp_path))
     rows = [l.rstrip("\n").split("\t") for l in open(tmp_path / "by_gene.tsv")]
     assert rows[0][-len(GENE_CN_COLUMNS):] == GENE_CN_COLUMNS

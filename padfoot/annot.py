@@ -23,7 +23,7 @@ class SV(object):
     __slots__ = ("bp_1", "direction_1", "bp_2", "direction_2", "supp",'supp_read_ids', 'has_ins', 'sv_type','vaf','loh', 'prec',\
                  'vcf_id', 'is_single', 'vntr', 'cluster_id', 'detailed_type', 'ins_seq', 'genes', 'repeat', 'microh', 'ins_align',\
                      'telomere', 'repeat_bp', 'hp1', 'hp2', 'cancer', 'impact',\
-                     'bp_hits', 'svlen', 'fusion', 'pairs')
+                     'bp_hits', 'primary', 'svlen', 'fusion', 'pairs')
     def __init__(self, bp_1, direction_1, bp_2, direction_2, supp, has_ins, sv_type,vaf, vcf_id, is_single, vntr, ins_seq, cluster_id, detailed_type, hp1, hp2, svlen=None):
         self.bp_1 = bp_1
         self.direction_1 = direction_1
@@ -46,6 +46,7 @@ class SV(object):
         self.detailed_type = detailed_type
         self.genes = []
         self.bp_hits = [[], []]
+        self.primary = [None, None]
         self.svlen = svlen
         self.fusion = ''
         self.pairs = []
@@ -82,7 +83,26 @@ class SV(object):
 
         st = self.direction_1 + self.direction_2
         return '\t'.join([self.vcf_id, self.bp_1[0], str(self.bp_1[1]), self.bp_2[0], str(self.bp_2[1]), str(self.supp),\
-         str(round(self.vaf, 3)), st, self.impact or ' ', self.cancer[0], gene1,  self.repeat_bp[0], self.cancer[1], gene2, self.repeat_bp[1], typ, microh, str(self.vntr), tel, ins_al, rep])
+         str(round(self.vaf, 3)), st, self.impact or ' ', self.cancer[0], gene1,  self.repeat_bp[0], self.cancer[1], gene2, self.repeat_bp[1], typ, microh, str(self.vntr), tel, ins_al, rep]
+         + self.new_fields())
+
+    def other_genes(self, i):
+        """Genes overlapping breakend i (body or padding) other than its primary gene."""
+        primary = self.primary[i].gene.key if self.primary[i] else None
+        return ','.join(dict.fromkeys(h.gene.name for h in self.bp_hits[i] if h.gene.key != primary))
+
+    def new_fields(self):
+        whole = [p.gene.name for p in self.pairs if any(l in WHOLE_GENE_LABELS.values() for l in p.labels)]
+        whole = WHOLE_GENE_LABELS[self.sv_type] + ':' + ','.join(whole) if whole else ''
+        alt = ','.join(dict.fromkeys(p.gene.name for p in self.pairs if 'alt_isoform_exon' in p.labels))
+        known = 'yes' if len(self.genes) == 3 and self.genes[2] == 'oncogenic_fusion' else 'no'
+        return [self.other_genes(0), self.other_genes(1), self.fusion, known, whole, alt,
+                str(self.cluster_id or ''), str(self.detailed_type or ''), self.haplotype()]
+
+    def haplotype(self):
+        """HP1/HP2 from the phased breakend(s); HP0 if neither is phased; HP1|HP2 if they disagree."""
+        hps = sorted({self.hp1, self.hp2} - {0})
+        return '|'.join('HP%d' % h for h in hps) if hps else 'HP0'
 
     def pos_str(self):
         if self.bp_1[0] == self.bp_2[0]:
@@ -90,8 +110,9 @@ class SV(object):
         return self.bp_1[0] + ':' + str(self.bp_1[1]) + '-' + self.bp_2[0] + ':' + str(self.bp_2[1])
 
 class Gene(object):
-    __slots__ = ("ref_id", "pos_1", "pos_2", "Gene_symbol", "cn", 'pairs', 'cancer')
-    def __init__(self, ref_id, pos_1, pos_2, Gene_symbol):
+    __slots__ = ("ref_id", "pos_1", "pos_2", "Gene_symbol", "gene_id", "cn", 'pairs', 'cancer')
+    def __init__(self, ref_id, pos_1, pos_2, Gene_symbol, gene_id=''):
+        self.gene_id = gene_id
         self.ref_id = ref_id
         self.pos_1 = pos_1
         self.pos_2 = pos_2
@@ -108,8 +129,10 @@ class Gene(object):
         for hp in (0, 1, 2):
             svs = sorted(set(p.to_sum() for p in self.pairs if hp in p.haplotypes))
             sv_info.append(','.join(svs))
+        svs = {p.sv.vcf_id: p.sv for p in self.pairs}
+        in_cluster = 'yes' if any(sv.cluster_id for sv in svs.values()) else 'no'
         return '\t'.join([self.Gene_symbol, pos, self.cancer, self.impact(1), sv_info[1], self.impact(2), sv_info[2],
-                          self.impact(0), sv_info[0]] + gene_cn_fields(self.cn))
+                          self.impact(0), sv_info[0], self.gene_id, str(len(svs)), in_cluster] + gene_cn_fields(self.cn))
 
 
 class GeneSVPair(object):
@@ -305,6 +328,7 @@ def annot_SVS(annotation, svs, by_gene, whole_gene_max=WHOLE_GENE_MAX_SV):
         hits2 = annotation.lookup(*sv.bp_2)
         p1, p2 = pick_primary(hits1, hits2), pick_primary(hits2, hits1)
         sv.bp_hits = [hits1, hits2]
+        sv.primary = [p1, p2]
         sv.genes = [p1.as_tuple() if p1 else (), p2.as_tuple() if p2 else (), sv_class(sv, p1, p2)]
         if sv.genes[2] in FUSION_CLASSES:
             five, three = (p1, p2) if is_5prime(p1, sv.direction_1) else (p2, p1)
@@ -312,21 +336,18 @@ def annot_SVS(annotation, svs, by_gene, whole_gene_max=WHOLE_GENE_MAX_SV):
         sv.pairs = gene_sv_pairs(annotation, sv, p1, p2, whole_gene_max)
         sv.impact = most_severe(p.tier for p in sv.pairs)
         for pair in sv.pairs:
-            g = pair.gene
-            add_gene(by_gene, g.name, g.chrom, g.start, g.end)
-            by_gene[g.name].pairs.append(pair)
+            add_gene(by_gene, pair.gene).pairs.append(pair)
 
-def add_gene(by_gene, gene, ref_id, pos1, pos2):
-    if not gene in by_gene.keys():
-        by_gene[gene] = Gene(ref_id, pos1, pos2, gene)
+def add_gene(by_gene, gene):
+    """by_gene row of an annotation gene, keyed by (chrom, gene_id)."""
+    if gene.key not in by_gene:
+        by_gene[gene.key] = Gene(gene.chrom, gene.start, gene.end, gene.name, gene.gene_id)
+    return by_gene[gene.key]
 
 def annot_gene_cn(annotation, profile, by_gene, sex='unknown', gain_high_multiplier=GAIN_HIGH_MULTIPLIER):
     """CN fields for every annotated gene (all genes get a by_gene row)."""
     for g in annotation.genes:
-        add_gene(by_gene, g.name, g.chrom, g.start, g.end)
-        row = by_gene[g.name]
-        if (row.ref_id, row.pos_1, row.pos_2) == (g.chrom, g.start, g.end):     # first locus of a duplicated name
-            row.cn = gene_cn(profile, g.chrom, g.start, g.end, sex, gain_high_multiplier)
+        add_gene(by_gene, g).cn = gene_cn(profile, g.chrom, g.start, g.end, sex, gain_high_multiplier)
 
 def check_cn_coverage(profile, annotation, ref):
     """Warn about chromosomes and regions without a CN call."""
@@ -550,9 +571,9 @@ def cancer_annot_svs(svs, cancer_genes, fusion):
                     pair.cls = 'oncogenic_fusion'
 
 def cancer_annot_genes(by_gene, cancer_genes):
-    for gene, gs in by_gene.items():
-        if gene in cancer_genes:
-            gs.cancer = cancer_genes[gene]
+    for gs in by_gene.values():
+        if gs.Gene_symbol in cancer_genes:
+            gs.cancer = cancer_genes[gs.Gene_symbol]
 
 def cancer_annot(svs, by_gene, cancer_gene_file):
     cancer_genes, fusion = load_cancer_genes(cancer_gene_file)
@@ -561,29 +582,27 @@ def cancer_annot(svs, by_gene, cancer_gene_file):
     cancer_annot_svs(svs, cancer_genes, fusion)
     cancer_annot_genes(by_gene, cancer_genes)
 
+SV_COLUMNS = ['SV ID', 'chr_1', 'pos_1', 'chr_2', 'pos_2', 'N_supp', 'Vaf', 'Strand', 'Impact',
+              'Role in Cancer1', 'Gene Name1', 'Pos_1', 'Strand_1', 'Repeat_Anno1',
+              'Role in Cancer2', 'Gene Name2', 'Pos_2', 'Strand_2', 'Repeat_Anno2',
+              'Type', 'Microhomology', 'VNTR', 'Telomere_repeat', 'Aligned_pos(INS)', 'Repeat_annot',
+              'Other_genes1', 'Other_genes2', 'fusion_partners', 'known_fusion', 'whole_gene_labels',
+              'alt_isoform_exon', 'cluster_id', 'detailed_type', 'haplotype']
+
+GENE_COLUMNS = ['Gene Name', 'Gene Pos', 'Role in Cancer', 'HP1 Impact', 'HP1 SV', 'HP2 Impact', 'HP2 SV',
+                'Unphased annot', 'Unphased SV', 'gene_id', 'n_SVs', 'in_cluster'] + GENE_CN_COLUMNS
+
 def output_svs(svs, out_dir):
-    fopen = open(out_dir + '/annotated_svs.tsv', 'w')
-    header = '\t'.join(['SV ID', 'chr_1', 'pos_1', 'chr_2', 'pos_2', 'N_supp', 'Vaf', 'Strand', 'Impact',\
-                         'Role in Cancer1', 'Gene Name1',  'Pos_1', 'Strand_1', 'Repeat_Anno1', 'Role in Cancer2', 'Gene Name2',  'Pos_2', \
-                             'Strand_2', 'Repeat_Anno2', 'Type', 'Microhomology', 'VNTR', \
-                                 'Telomere_repeat', 'Aligned_pos(INS)', 'Repeat_annot'])
-    fopen.write(header)
-    fopen.write('\n')
-    for sv in svs:
-        fopen.write(sv.to_str())
-        fopen.write('\n')
-    fopen.close()
-    
+    with open(os.path.join(out_dir, 'annotated_svs.tsv'), 'w') as f:
+        f.write('\t'.join(SV_COLUMNS) + '\n')
+        for sv in svs:
+            f.write(sv.to_str() + '\n')
+
 def output_genes(by_gene, out_dir):
-    f = open(out_dir + '/by_gene.tsv', 'w')
-    header = '\t'.join(['Gene Name','Gene Pos','Role in Cancer', 'HP1 Impact','HP1 SV', 'HP2 Impact', 'HP2 SV',
-                        'Unphased annot', 'Unphased SV'] + GENE_CN_COLUMNS)
-    f.write(header)
-    f.write('\n')
-    for gene, val in by_gene.items():
-        f.write(val.to_str())
-        f.write('\n')
-    f.close()
+    with open(os.path.join(out_dir, 'by_gene.tsv'), 'w') as f:
+        f.write('\t'.join(GENE_COLUMNS) + '\n')
+        for row in by_gene.values():
+            f.write(row.to_str() + '\n')
 
 
 def _location(hit):

@@ -132,7 +132,7 @@ def test_gene_impact_is_most_severe_per_haplotype(toy_annotation, parse_svs):
         DEL("X", E2[0] + 10, E2[0] + 20, hp="1|1"),      # coding exon, HIGH
         DEL("U", 132_000, 133_000, hp="0|0"),            # promoter/UTR, MODERATE, unphased
     ])
-    g = by_gene["GENEA"]
+    g = next(r for r in by_gene.values() if r.Gene_symbol == "GENEA")
     assert (g.impact(1), g.impact(2), g.impact(0)) == ("HIGH", "", "MODERATE")
 
 

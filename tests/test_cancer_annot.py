@@ -61,9 +61,10 @@ def test_gene_table_role(classify):
     by_gene = defaultdict(list)
     for sv in svs.values():
         for p in sv.pairs:
-            annot.add_gene(by_gene, p.gene.name, p.gene.chrom, p.gene.start, p.gene.end)
+            annot.add_gene(by_gene, p.gene)
     annot.cancer_annot_genes(by_gene, {"GENEG": "oncogene"})
-    assert (by_gene["GENEG"].cancer, by_gene["GENEA"].cancer) == ("oncogene", "")
+    rows = {r.Gene_symbol: r for r in by_gene.values()}
+    assert (rows["GENEG"].cancer, rows["GENEA"].cancer) == ("oncogene", "")
 
 
 # --- list loading ----------------------------------------------------------------
