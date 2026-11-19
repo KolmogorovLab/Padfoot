@@ -14,3 +14,4 @@ dependencies:
   - repeatmasker
   - pip
   - bedtools
+  - pytest
