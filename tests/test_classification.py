@@ -42,15 +42,12 @@ CASES = [
     # both ends in padding but on opposite sides: not promoter/UTR (as in v0.1)
     pytest.param(DEL("A", "chr1", 92_000, 133_000), "between_exons", id="flank-to-flank"),
 
-    # --- v0.1 bugs still open --------------------------------------------------
-    pytest.param(DEL("A", "chr1", E2[0] + 50, E2[0] + 101), "exon_altering", id="exon-inframe",
-                 marks=V01_BUG("frame test uses svlen // 3 instead of svlen % 3")),
+    # --- fixed in v0.2 (classification) -----------------------------------------
+    pytest.param(DEL("A", "chr1", E2[0] + 50, E2[0] + 101), "exon_altering", id="exon-inframe"),
     pytest.param(dict(id="A", chrom="chr1", pos=E2[0] + 50, svlen=50, svtype="INS", alt="A" * 50),
-                 "frameshift", id="INS-frameshift",
-                 marks=V01_BUG("insertions get length 0; SVLEN should be used")),
+                 "frameshift", id="INS-frameshift"),
     pytest.param(dict(id="A", chrom="chr1", pos=105_500, mate=("chr2", 95_000), svtype="BND", strands="+-"),
-                 "between_genes", id="fusion-needs-gene-body",
-                 marks=V01_BUG("possible_fusion called when one end is only in the padding")),
+                 "between_genes", id="fusion-needs-gene-body"),
 ]
 
 

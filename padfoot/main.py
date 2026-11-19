@@ -146,6 +146,8 @@ def main():
     parser.add_argument("-t", "--threads", dest="threads", default=8, type=int, metavar="int",
                         help="number of parallel threads [8]")
     parser.add_argument("--specie", dest="specie", default="human", help="Specie")
+    parser.add_argument("--whole-gene-max-sv", dest="whole_gene_max_sv", default=1_000_000, type=int, metavar="int",
+                        help="label genes lying entirely inside a DEL/DUP/INV up to this length [1000000]")
     parser.add_argument("--skip_RepeatMasker", dest="run_repeatmasker", action = "store_false", help="Skip RepeatMasker [True]")
     args = parser.parse_args()
 

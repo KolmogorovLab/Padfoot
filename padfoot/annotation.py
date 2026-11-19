@@ -284,6 +284,14 @@ class Annotation(object):
         genes = sorted((iv.data for iv in self.trees[chrom][pos]), key=lambda g: (g.start, g.end, g.gene_id))
         return [locate(g, pos) for g in genes]
 
+    def genes_within(self, chrom, start, end):
+        """Genes whose body lies entirely inside [start, end]."""
+        chrom = self._chrom(chrom)
+        if chrom is None:
+            return []
+        genes = {iv.data for iv in self.trees[chrom].overlap(start, end + 1)}
+        return sorted((g for g in genes if start <= g.start and g.end <= end), key=lambda g: (g.start, g.end, g.gene_id))
+
     def genes_by_chrom(self):
         out = defaultdict(list)
         for g in self.genes:
