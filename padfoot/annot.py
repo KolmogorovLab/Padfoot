@@ -11,7 +11,6 @@ from collections import defaultdict
 import subprocess
 from Bio import Align
 import os
-import pandas as pd
 import logging
 
 from padfoot.annotation import load_annotation
@@ -503,35 +502,60 @@ def annot_ins(svs, ref,t, rm_bed, specie, run_repeatmasker):
     annot_bp_repeat(svls, rm_bed)
     
     
+CANCER_GENE_COLUMNS = ('Gene_symbol', 'Role_in_cancer', 'fusion')
+
+def load_cancer_genes(path):
+    """Cancer gene list: a TSV with a header containing Gene_symbol, Role_in_cancer
+    and fusion (comma-separated partner symbols); other columns are ignored.
+    Returns ({gene: role}, {gene: [fusion partners]})."""
+    roles, fusion = {}, defaultdict(list)
+    with open(path) as f:
+        header = f.readline().rstrip('\n').split('\t')
+        missing = [c for c in CANCER_GENE_COLUMNS if c not in header]
+        if missing:
+            raise ValueError(f"{path}: cancer gene list lacks column(s) {missing}")
+        col = {c: header.index(c) for c in CANCER_GENE_COLUMNS}
+        for line in f:
+            row = line.rstrip('\n').split('\t')
+            row += [''] * (len(header) - len(row))
+            gene = row[col['Gene_symbol']].strip()
+            if not gene:
+                continue
+            role = row[col['Role_in_cancer']].strip()
+            if role:
+                roles[gene] = role
+            partners = [x.strip() for x in row[col['fusion']].split(',') if x.strip()]
+            fusion[gene].extend(x for x in partners if x not in fusion[gene])
+    return roles, fusion
+
+def is_known_fusion(a, b, fusion):
+    """Gene pair listed as a fusion, under either partner."""
+    return b in fusion.get(a, ()) or a in fusion.get(b, ())
+
 def cancer_annot_svs(svs, cancer_genes, fusion):
-    """Cancer-gene role of each breakend's gene and the known-fusion lookup (labels only)."""
+    """Cancer-gene role of each breakend's gene and the known-fusion lookup (labels only):
+    a possible_fusion of a listed pair becomes oncogenic_fusion (same HIGH tier)."""
     for sv in svs:
         if not sv.genes[2]:
             continue
         for i in (0, 1):
-            if sv.genes[i] and sv.genes[i][0] in cancer_genes.keys():
+            if sv.genes[i] and sv.genes[i][0] in cancer_genes:
                 sv.cancer[i] = cancer_genes[sv.genes[i][0]]
-        if sv.genes[2] == 'possible_fusion':
-            if sv.genes[0][0] in fusion.keys():
-                if sv.genes[1][0] in fusion[sv.genes[1][0]]:
-                    sv.genes[2] == 'oncogenic_fusion'
+        if sv.genes[2] == 'possible_fusion' and is_known_fusion(sv.genes[0][0], sv.genes[1][0], fusion):
+            sv.genes[2] = 'oncogenic_fusion'
+            for pair in sv.pairs:
+                if pair.cls == 'possible_fusion':
+                    pair.cls = 'oncogenic_fusion'
 
 def cancer_annot_genes(by_gene, cancer_genes):
     for gene, gs in by_gene.items():
-        if gene in cancer_genes.keys():
+        if gene in cancer_genes:
             gs.cancer = cancer_genes[gene]
 
-def cancer_annot(svs, by_gene):
-
-    url = 'https://raw.githubusercontent.com/aysegokce/PadfootFiles/refs/heads/main/cancer_genes.tsv'
-    df = pd.read_csv(url, sep='\t')
-    cancer_genes = defaultdict(list)
-    fusion = defaultdict(list)
-    for index, row in df.iterrows():
-        if not pd.isna(row['fusion']):
-            fusion[row['Gene_symbol']] = row['fusion'].split(',')
-        if not pd.isna(row['Role_in_cancer']):    
-            cancer_genes[row['Gene_symbol']] = row['Role_in_cancer']
+def cancer_annot(svs, by_gene, cancer_gene_file):
+    cancer_genes, fusion = load_cancer_genes(cancer_gene_file)
+    logger.info("Cancer gene list: %s (%d genes with a role, %d with fusion partners)",
+                cancer_gene_file, len(cancer_genes), sum(1 for v in fusion.values() if v))
     cancer_annot_svs(svs, cancer_genes, fusion)
     cancer_annot_genes(by_gene, cancer_genes)
 
@@ -596,8 +620,8 @@ def annotate_things(args):
         annot_gene_cn(annotation, profile, by_gene, getattr(args, 'sex', 'unknown'),
                       getattr(args, 'gain_high_multiplier', GAIN_HIGH_MULTIPLIER))
     annot_SVS(annotation, svs, by_gene, getattr(args, 'whole_gene_max_sv', WHOLE_GENE_MAX_SV))
-    if args.specie == 'human':
-        cancer_annot(svs, by_gene)
+    if getattr(args, 'cancer_genes', None):
+        cancer_annot(svs, by_gene, args.cancer_genes)
     annot_ins(svs, ref,t, args.rm_file, args.specie, args.run_repeatmasker)
     get_microhomology(svs, ref)
     output_svs(svs, out_dir)

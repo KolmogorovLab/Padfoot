@@ -152,6 +152,9 @@ def main():
     parser.add_argument("-t", "--threads", dest="threads", default=8, type=int, metavar="int",
                         help="number of parallel threads [8]")
     parser.add_argument("--specie", dest="specie", default="human", help="Specie")
+    parser.add_argument("--cancer-genes", dest="cancer_genes", default=None, metavar="path",
+                        help="cancer gene list (TSV with Gene_symbol, Role_in_cancer, fusion columns) "
+                             "[bundled list for --specie human, none otherwise]")
     parser.add_argument("--whole-gene-max-sv", dest="whole_gene_max_sv", default=1_000_000, type=int, metavar="int",
                         help="label genes lying entirely inside a DEL/DUP/INV up to this length [1000000]")
     parser.add_argument("--skip_RepeatMasker", dest="run_repeatmasker", action = "store_false", help="Skip RepeatMasker [True]")
@@ -253,6 +256,18 @@ def main():
 
     if args.genome == "mm10" and args.specie != "mouse":
         logger.warning("Genome preset mm10 usually implies species 'mouse'; current value: %s", args.specie)
+
+    if args.cancer_genes:
+        if not os.path.exists(args.cancer_genes):
+            logger.error("Cancer gene list does not exist: %s", args.cancer_genes)
+            sys.exit(1)
+        args.cancer_genes = os.path.abspath(args.cancer_genes)
+    elif args.specie == "human":
+        args.cancer_genes = os.path.join(beds, "cancer_genes.tsv")
+    if args.cancer_genes:
+        logger.info("Cancer gene list: %s", args.cancer_genes)
+    else:
+        logger.info("No cancer gene list for species %s; cancer roles and known fusions not annotated", args.specie)
 
     logger.info("Annotation inputs resolved successfully")
     logger.info("Gene annotation: %s", args.gff_file)
