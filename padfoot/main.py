@@ -18,6 +18,7 @@ import logging
 from padfoot.annot import annotate_things
 from padfoot.preprocess import generate_rm
 from padfoot.annotation import build_annotation, is_compact_annotation
+from padfoot.copynumber import SEXES, GAIN_HIGH_MULTIPLIER
 #from padfoot_cluster_cns import cluster_cn
 from padfoot.__version__ import __version__
 
@@ -130,8 +131,13 @@ def main():
     parser.add_argument("-v", "--version", action="version", version=_version())
     parser.add_argument("--severus-vcf", dest="vcf_file", metavar="path", required=True,
                         help="path to Severus vcf file")
-    parser.add_argument("--wakhan-vcf", dest="cna_vcf", metavar="path", required=True,
-                        help="path to Wakhan vcf file")
+    parser.add_argument("--wakhan-profile", dest="wakhan_profile", metavar="path", required=True,
+                        help="Wakhan (>= 0.5.0) integer_profile.bed of the chosen solution")
+    parser.add_argument("--sex", dest="sex", choices=SEXES, default="unknown",
+                        help="sex of the sample; no LOH is called on chrX of male samples [unknown]")
+    parser.add_argument("--gain-high-multiplier", dest="gain_high_multiplier", default=GAIN_HIGH_MULTIPLIER,
+                        type=float, metavar="float",
+                        help="GAIN_HIGH when the gene's total CN exceeds this multiple of the modal CN [3]")
     parser.add_argument("--ref", "-r", dest="ref", metavar="path", required=True,
                         help="path to reference file")
     parser.add_argument("--out-dir", dest="out_dir", required=True, metavar="path",
@@ -155,7 +161,7 @@ def main():
 
     args.out_dir = os.path.abspath(args.out_dir)
     args.vcf_file = os.path.abspath(args.vcf_file)
-    args.cna_vcf = os.path.abspath(args.cna_vcf)
+    args.wakhan_profile = os.path.abspath(args.wakhan_profile)
     args.ref = os.path.abspath(args.ref)
 
     os.makedirs(args.out_dir, exist_ok=True)
@@ -177,7 +183,8 @@ def main():
     logger.info("Output directory: %s", args.out_dir)
 
     logger.info("Input Severus VCF: %s", args.vcf_file)
-    logger.info("Input Wakhan VCF: %s", args.cna_vcf)
+    logger.info("Input Wakhan profile: %s", args.wakhan_profile)
+    logger.info("Sex: %s", args.sex)
     logger.info("Reference FASTA: %s", args.ref)
     logger.info("Threads: %s", args.threads)
     logger.info("Requested species: %s", args.specie)
@@ -187,9 +194,11 @@ def main():
         logger.error("Severus VCF does not exist: %s", args.vcf_file)
         sys.exit(1)
 
-    if not os.path.exists(args.cna_vcf):
-        logger.error("Wakhan VCF does not exist: %s", args.cna_vcf)
+    if not os.path.isfile(args.wakhan_profile):
+        logger.error("Wakhan profile does not exist or is not a file: %s", args.wakhan_profile)
         sys.exit(1)
+    if args.sex == "unknown":
+        logger.warning("--sex not given: LOH is called on chrX as for a female sample")
 
     if not os.path.exists(args.ref):
         logger.error("Reference FASTA does not exist: %s", args.ref)
@@ -250,10 +259,10 @@ def main():
     logger.info("RepeatMasker file: %s", args.rm_file)
 
     logger.info("Starting annotation pipeline")
-    annotation, cnas, svs, by_gene = annotate_things(args)
+    annotation, profile, svs, by_gene = annotate_things(args)
 
     logger.info("Annotation pipeline finished")
-    logger.info("Summary: genes=%d, cnas=%d, svs=%d, by_gene=%d",
-                len(annotation.genes), len(cnas), len(svs), len(by_gene))
+    logger.info("Summary: genes=%d, cn_fragments=%d, svs=%d, by_gene=%d",
+                len(annotation.genes), len(profile) if profile else 0, len(svs), len(by_gene))
     logger.info("Log file written to: %s", log_file)
     logger.info("Padfoot completed successfully")

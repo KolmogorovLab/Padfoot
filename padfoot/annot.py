@@ -7,25 +7,23 @@ Created on Mon Mar 17 14:30:38 2025
 """
 
 import pysam
-from collections import defaultdict, Counter
-from typing import Dict, List
-import bisect
+from collections import defaultdict
 import subprocess
 from Bio import Align
 import os
-import copy
-import numpy as np
 import pandas as pd
 import logging
 
 from padfoot.annotation import load_annotation
+from padfoot.copynumber import (read_wakhan_profile, gene_cn, gene_cn_fields, coverage_gaps,
+                                GENE_CN_COLUMNS, GAIN_HIGH_MULTIPLIER)
 
 logger = logging.getLogger()
 
 class SV(object):
     __slots__ = ("bp_1", "direction_1", "bp_2", "direction_2", "supp",'supp_read_ids', 'has_ins', 'sv_type','vaf','loh', 'prec',\
                  'vcf_id', 'is_single', 'vntr', 'cluster_id', 'detailed_type', 'ins_seq', 'genes', 'repeat', 'microh', 'ins_align',\
-                     'telomere', 'repeat_bp', 'cn_assigned', 'cn_altering', 'hp1', 'hp2', 'cancer', 'impact',\
+                     'telomere', 'repeat_bp', 'hp1', 'hp2', 'cancer', 'impact',\
                      'bp_hits', 'svlen', 'fusion', 'pairs')
     def __init__(self, bp_1, direction_1, bp_2, direction_2, supp, has_ins, sv_type,vaf, vcf_id, is_single, vntr, ins_seq, cluster_id, detailed_type, hp1, hp2, svlen=None):
         self.bp_1 = bp_1
@@ -57,8 +55,6 @@ class SV(object):
         self.ins_align = []
         self.telomere = ''
         self.repeat_bp = ['', '']
-        self.cn_assigned  = ''
-        self.cn_altering = False
         self.cancer = [' ',' ']
         self.impact = ''
         
@@ -94,33 +90,16 @@ class SV(object):
             return self.bp_1[0] + ':' + str(self.bp_1[1]) + '-' + str(self.bp_2[1])
         return self.bp_1[0] + ':' + str(self.bp_1[1]) + '-' + self.bp_2[0] + ':' + str(self.bp_2[1])
 
-class CNA(object):
-    __slots__ = ("ref_id", "pos_1", "pos_2", "cn", "haplotype",'LOH', 'sv1', 'sv2', 'genes', 'dir1')
-    def __init__(self, ref_id, pos_1, pos_2, cn, haplotype, LOH, sv1, sv2):
-        self.ref_id = ref_id
-        self.pos_1 = pos_1
-        self.pos_2 = pos_2
-        self.cn = cn
-        self.haplotype = haplotype
-        self.LOH = LOH
-        self.sv1 = sv1
-        self.sv2 = sv2
-        self.genes = []
-        self.dir1 = 'NEUT'
-    def get_name(self):
-        return 'HP' + str(self.haplotype) +':' + self.ref_id + ':' + str(self.pos_1) + '-' + str(self.pos_2)
-
 class Gene(object):
-    __slots__ = ("ref_id", "pos_1", "pos_2", "Gene_symbol", "CN", 'pairs', 'cancer', 'CN_impact')
+    __slots__ = ("ref_id", "pos_1", "pos_2", "Gene_symbol", "cn", 'pairs', 'cancer')
     def __init__(self, ref_id, pos_1, pos_2, Gene_symbol):
         self.ref_id = ref_id
         self.pos_1 = pos_1
         self.pos_2 = pos_2
         self.Gene_symbol = Gene_symbol
-        self.CN = [0,0]
+        self.cn = None
         self.pairs = []
         self.cancer = ''
-        self.CN_impact = ['','']
     def impact(self, hp):
         """Most severe SV tier on one haplotype (0 = unphased)."""
         return most_severe(p.tier for p in self.pairs if hp in p.haplotypes)
@@ -130,8 +109,8 @@ class Gene(object):
         for hp in (0, 1, 2):
             svs = sorted(set(p.to_sum() for p in self.pairs if hp in p.haplotypes))
             sv_info.append(','.join(svs))
-        return '\t'.join([self.Gene_symbol, pos, self.cancer, self.CN_impact[0], str(self.CN[0]), self.impact(1), sv_info[1],
-                          self.CN_impact[1], str(self.CN[1]), self.impact(2), sv_info[2], self.impact(0), sv_info[0]])
+        return '\t'.join([self.Gene_symbol, pos, self.cancer, self.impact(1), sv_info[1], self.impact(2), sv_info[2],
+                          self.impact(0), sv_info[0]] + gene_cn_fields(self.cn))
 
 
 class GeneSVPair(object):
@@ -205,199 +184,6 @@ def get_bps(vcf_file):
         svs[vcf_id]=(SV(bp_1, dir1, bp_2, dir2, supp, has_ins, sv_type,vaf, vcf_id, is_single, vntr,ins_seq, cluster_id, detailed_type, hp1, hp2, svlen))
     return list(svs.values())
 
-def fill_missing_segments_cn1(
-    chr_lens: Dict[str, int],
-    hp1ls: Dict[str, List[List[int]]],
-    default_cn: float = 1.0,
-    assume_1based_inclusive: bool = True,
-):
-    hp1ls_filled: Dict[str, List[List[int]]] = {}
-    for chrom , L in chr_lens.items():
-        L = int(L)
-        if assume_1based_inclusive:
-            span_start, span_end = 1, L
-        else:
-            span_start, span_end = 0, L 
-        if chrom not in hp1ls or len(hp1ls[chrom]) != 3 or len(hp1ls[chrom][0]) == 0:
-            if assume_1based_inclusive:
-                hp1ls_filled[chrom] = [[default_cn], [span_start], [span_end]]
-            else:
-                hp1ls_filled[chrom] = [[default_cn], [span_start], [span_end]]
-            continue
-        cn_list, s_list, e_list = hp1ls[chrom]
-        segs = sorted(
-            [(float(cn_list[i]), int(s_list[i]), int(e_list[i])) for i in range(len(cn_list))],
-            key=lambda x: (x[1], x[2]),
-        )
-        clamped = []
-        for cn, s, e in segs:
-            if assume_1based_inclusive:
-                s = max(s, span_start)
-                e = min(e, span_end)
-                if s <= e:
-                    clamped.append((cn, s, e))
-            else:
-                s = max(s, span_start)
-                e = min(e, span_end)
-                if s < e:
-                    clamped.append((cn, s, e))
-        merged = []
-        for cn, s, e in clamped:
-            if not merged:
-                merged.append([cn, s, e])
-                continue
-            pcn, ps, pe = merged[-1]
-            if assume_1based_inclusive:
-                overlap_or_touch = s <= pe + 1
-            else:
-                overlap_or_touch = s <= pe  # [ps,pe) touches when s==pe
-            if overlap_or_touch:
-                merged[-1][2] = max(pe, e)
-            else:
-                merged.append([cn, s, e])
-        out_cn, out_s, out_e = [], [], []
-        cur = span_start
-        for cn, s, e in merged:
-            if assume_1based_inclusive:
-                if cur < s:
-                    out_cn.append(default_cn)
-                    out_s.append(cur)
-                    out_e.append(s - 1)
-                out_cn.append(cn); out_s.append(s); out_e.append(e)
-                cur = e + 1
-            else:
-                if cur < s:
-                    out_cn.append(default_cn)
-                    out_s.append(cur)
-                    out_e.append(s)
-                out_cn.append(cn); out_s.append(s); out_e.append(e)
-                cur = e
-        if assume_1based_inclusive:
-            if cur <= span_end:
-                out_cn.append(default_cn)
-                out_s.append(cur)
-                out_e.append(span_end)
-        else:
-            if cur < span_end:
-                out_cn.append(default_cn)
-                out_s.append(cur)
-                out_e.append(span_end)
-        hp1ls_filled[chrom] = [out_cn, out_s, out_e]
-    return hp1ls_filled
-
-def get_CNA(cna_vcf, svs):
-    vcf = pysam.VariantFile(cna_vcf)
-    hp1ls = defaultdict(list)
-    hp2ls = defaultdict(list)
-    LOH  = defaultdict(list)
-    THR=1
-    CNAs = defaultdict(list)
-    ploidy = []
-    cov1 = []
-    chrs = vcf.header.contigs.keys()
-    chr_lens = [x.length for x in vcf.header.contigs.values() ]
-    chr_lens = dict(zip(chrs, chr_lens))
-    for var in vcf:
-        ref_id, pos_1, pos_2 = var.chrom, var.pos, var.stop
-        hp1, hp2 = var.samples['Sample']['CN1'], var.samples['Sample']['CN2']
-        if hp1:
-            cov1.append( var.samples['Sample']['COV1']/hp1)
-        if ref_id in hp1ls:
-            if not hp1ls[ref_id][0][-1] == hp1:
-                if abs(hp1ls[ref_id][2][-1] - pos_1) > THR:
-                    hp1ls[ref_id][0].append(1)
-                    hp1ls[ref_id][1].append(hp1ls[ref_id][2][-1]+1)
-                    hp1ls[ref_id][2].append(pos_1-1)
-                pos_1 = pos_1 if pos_1 > hp1ls[ref_id][2][-1] else pos_1 + 1
-                hp1ls[ref_id][0].append(hp1)
-                hp1ls[ref_id][1].append(pos_1)
-                hp1ls[ref_id][2].append(pos_2)
-            else:
-                hp1ls[ref_id][2][-1] = pos_2
-            if not hp2ls[ref_id][0][-1] == hp2:
-                if abs(hp2ls[ref_id][2][-1] - pos_1) > THR:
-                    hp2ls[ref_id][0].append(1)
-                    hp2ls[ref_id][1].append(hp2ls[ref_id][2][-1]+1)
-                    hp2ls[ref_id][2].append(pos_1-1)
-                pos_1 = pos_1 if pos_1 > hp2ls[ref_id][2][-1] else pos_1 + 1
-                hp2ls[ref_id][0].append(hp2)
-                hp2ls[ref_id][1].append(pos_1)
-                hp2ls[ref_id][2].append(pos_2)
-            else:
-                hp2ls[ref_id][2][-1] = pos_2
-        else:
-            hp1ls[ref_id]= [[hp1],[pos_1],[pos_2]]
-            hp2ls[ref_id] = [[hp2],[pos_1], [pos_2]]
-        if hp1 == 0 or hp2 == 0:
-            if ref_id in LOH.keys():
-                LOH[ref_id][0].append(pos_1)
-                LOH[ref_id][1].append(pos_2)
-            else:
-                LOH[ref_id]= [[pos_1],[pos_2]]
-
-    cn1_cov = int(np.median(cov1)) *0.75
-    #hp1ls = fill_missing_segments_cn1(chr_lens, hp1ls)
-    #hp2ls = fill_missing_segments_cn1(chr_lens, hp2ls)
-    for hp, hpls in enumerate([hp1ls, hp2ls]):
-        ploidy_hp = 0
-        len_cn = 0
-        for ref_id, (cnls, pos1ls, pos2ls) in hpls.items():
-            loh = False
-            for i, (pos_1, pos_2) in enumerate(zip(pos1ls, pos2ls)):
-                cn = cnls[i]
-                ls1 = [(ref_id, pos_1),(ref_id, pos_1+1),(ref_id, pos_1-1)]
-                sv1 = [sv for sv in svs if sv.bp_1 in ls1 and sv.direction_1 == '-' or sv.bp_2 in ls1 and sv.direction_2 == '-']
-                sv1 = sv1[0] if sv1 else ''
-                ls2 = [(ref_id, pos_2),(ref_id, pos_2+1),(ref_id, pos_2-1)]
-                sv2 = [sv for sv in svs if sv.bp_1 in ls2 and sv.direction_1 == '+' or sv.bp_2 in ls2 and sv.direction_2 == '+' ]
-                sv2 = sv2[0] if sv2 else ''
-                if ref_id in LOH.keys() and  pos_1 in LOH[ref_id][0]:
-                    loh = True
-                CNAs[(ref_id, hp+1)].append(CNA(ref_id, pos_1, pos_2, cn, hp+1, loh, sv1, sv2))
-                len_cn += (pos_2 - pos_1)
-                ploidy_hp += cn * (pos_2 - pos_1)
-        ploidy.append(round(ploidy_hp/len_cn))     
-
-    check_hp_svs(CNAs)
-    for (ref,hp), cnas in CNAs.items():
-        pl = ploidy[hp-1]
-        for cna in cnas:
-            if cna.cn > pl:
-                cna.dir1 = 'AMP'
-            elif cna.cn < pl:
-                cna.dir1 = 'DEL'
-    check_cn_altering_svs(svs, cn1_cov)
-    return(CNAs, ploidy)
-
-def check_cn_altering_svs(svs, cn1_cov):
-    for sv in svs:
-        sv.cn_altering = round(sv.supp/cn1_cov)
-
-def check_hp_svs(cnas):
-    multsvs = defaultdict(list)
-    for cns in cnas.values():
-        for cn in cns:
-            if cn.sv1:
-                multsvs[cn.sv1].append(cn)
-            if cn.sv2:
-                multsvs[cn.sv2].append(cn)
-    for sv, cns in multsvs.items():
-        xx = Counter([(cn.ref_id, cn.pos_1) for cn in cns])
-        xx = [x for x in xx.values() if x > 1]
-        
-        yy = Counter([(cn.ref_id, cn.pos_2) for cn in cns])
-        yy = [x for x in yy.values() if x > 1]
-        
-        if not xx and not yy:
-            continue
-        hp2 = [cn for cn in cns if cn.haplotype == 2]
-        new_sv = copy.copy(sv)
-        for cn in hp2:
-            if cn.sv1 == sv:
-                cn.sv1 = new_sv
-            else:
-                cn.sv2 = new_sv
-    
 def get_genes(annotation_file):
     """Load the compact gene annotation (see padfoot/annotation.py)."""
     return load_annotation(annotation_file)
@@ -535,37 +321,31 @@ def add_gene(by_gene, gene, ref_id, pos1, pos2):
     if not gene in by_gene.keys():
         by_gene[gene] = Gene(ref_id, pos1, pos2, gene)
 
-def annot_CNAs(annotation, cnas, ploidy, by_gene):
-    hps = [1,2]
-    pad = annotation.padding
-    for ref_id, genels in annotation.genes_by_chrom().items():
-        if not (ref_id,1) in cnas.keys():
-            continue
-        for hp in hps:
-            cn_prof = cnas[ref_id, hp]
-            cn_start = [cn.pos_1 for cn in cn_prof]
-            cn_end = [cn.pos_2 for cn in cn_prof]
-            cn = [cn.cn for cn in cn_prof]
-            for g in genels:
-                gene = g.name
-                ind1 = bisect.bisect_right(cn_start, g.start - pad)
-                ind2 = bisect.bisect_left(cn_end, g.end + pad)
-                add_gene(by_gene, gene, ref_id, g.start, g.end)
-                if not ind1 - ind2 == 1:
-                    cn_prof[ind1-1].genes.append((gene, 'disturbed'))
-                elif cn[ind1-1] > ploidy[hp-1]:
-                    cn_prof[ind1-1].genes.append(gene)
-                    cn_prof[ind1-1].dir1 = 'AMP'
-                elif cn[ind1-1] < ploidy[hp-1]:
-                    cn_prof[ind1-1].genes.append(gene)
-                    cn_prof[ind1-1].dir1 = 'DEL'
-                by_gene[gene].CN_impact[hp-1] = cn_prof[ind1-1].dir1
-                by_gene[gene].CN[hp-1] = cn[ind1-1]
+def annot_gene_cn(annotation, profile, by_gene, sex='unknown', gain_high_multiplier=GAIN_HIGH_MULTIPLIER):
+    """CN fields for every annotated gene (all genes get a by_gene row)."""
+    for g in annotation.genes:
+        add_gene(by_gene, g.name, g.chrom, g.start, g.end)
+        row = by_gene[g.name]
+        if (row.ref_id, row.pos_1, row.pos_2) == (g.chrom, g.start, g.end):     # first locus of a duplicated name
+            row.cn = gene_cn(profile, g.chrom, g.start, g.end, sex, gain_high_multiplier)
 
-def check_complexSV(cnas, svs):
-    svls = defaultdict(list)
-    for sv in svs:
-         svls[sv.vcf_id] = sv
+def check_cn_coverage(profile, annotation, ref):
+    """Warn about chromosomes and regions without a CN call."""
+    lengths = {}
+    if os.path.exists(ref + '.fai'):
+        with open(ref + '.fai') as f:
+            for line in f:
+                name, length = line.split('\t')[:2]
+                lengths[name] = int(length)
+    chroms = list(dict.fromkeys(list(profile.by_chrom) + [g.chrom for g in annotation.genes]))
+    absent, gaps = coverage_gaps(profile, lengths, chroms)
+    if absent:
+        logger.warning("No CN profile for %d chromosome(s) with annotated genes: %s", len(absent), ', '.join(absent))
+    if gaps:
+        total = sum(e - s + 1 for _, s, e in gaps)
+        logger.warning("CN profile has %d gap(s) totalling %d bp (no call for both haplotypes); first: %s",
+                       len(gaps), total, ', '.join(f'{c}:{s}-{e}' for c, s, e in gaps[:5]))
+    return absent, gaps
 
 def run_command(cmd):
     p = subprocess.Popen(cmd, shell= True)
@@ -770,7 +550,8 @@ def output_svs(svs, out_dir):
     
 def output_genes(by_gene, out_dir):
     f = open(out_dir + '/by_gene.tsv', 'w')
-    header = '\t'.join(['Gene Name','Gene Pos','Role in Cancer', 'HP1', 'HP1 CN','HP1 Impact','HP1 SV', 'HP2', 'HP2 CN','HP2 Impact', 'HP2 SV', 'Unphased annot', 'Unphased SV'])
+    header = '\t'.join(['Gene Name','Gene Pos','Role in Cancer', 'HP1 Impact','HP1 SV', 'HP2 Impact', 'HP2 SV',
+                        'Unphased annot', 'Unphased SV'] + GENE_CN_COLUMNS)
     f.write(header)
     f.write('\n')
     for gene, val in by_gene.items():
@@ -803,14 +584,17 @@ def output_gene_sv_pairs(svs, out_dir):
                                    sv.fusion if p.cls in FUSION_CLASSES else '', ','.join(p.labels)]) + '\n')
 
 def annotate_things(args):
-    cna_vcf, vcf_file, t, ref, out_dir = args.cna_vcf, args.vcf_file, args.threads, args.ref, args.out_dir
+    vcf_file, t, ref, out_dir = args.vcf_file, args.threads, args.ref, args.out_dir
     by_gene = defaultdict(list)
     annotation = get_genes(args.gff_file)
     svs = get_bps(vcf_file)
-    cnas = []
-    if cna_vcf:
-        cnas, ploidy = get_CNA(cna_vcf, svs)
-        annot_CNAs(annotation, cnas, ploidy, by_gene)
+    profile = None
+    if getattr(args, 'wakhan_profile', None):
+        profile = read_wakhan_profile(args.wakhan_profile)
+        logger.info("CN profile: %s (%d fragments, modal CN %s)", profile.path, len(profile), profile.modal_cn)
+        check_cn_coverage(profile, annotation, ref)
+        annot_gene_cn(annotation, profile, by_gene, getattr(args, 'sex', 'unknown'),
+                      getattr(args, 'gain_high_multiplier', GAIN_HIGH_MULTIPLIER))
     annot_SVS(annotation, svs, by_gene, getattr(args, 'whole_gene_max_sv', WHOLE_GENE_MAX_SV))
     if args.specie == 'human':
         cancer_annot(svs, by_gene)
@@ -819,4 +603,4 @@ def annotate_things(args):
     output_svs(svs, out_dir)
     output_genes(by_gene, out_dir)
     output_gene_sv_pairs(svs, out_dir)
-    return (annotation, cnas, svs, by_gene)
+    return (annotation, profile, svs, by_gene)
