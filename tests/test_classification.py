@@ -34,20 +34,20 @@ CASES = [
                  "possible_fusion", id="fusion-BND"),
     pytest.param(dict(id="A", chrom="chr1", pos=E2[0] + 50, svtype="sBND"), "exon_altering", id="sBND-in-exon"),
 
-    # --- v0.1 bugs -----------------------------------------------------------
+    # --- fixed in v0.2 (annotation lookup and breakend labels) -----------------
+    pytest.param(DEL("A", "chr1", 103_000, 127_000), "between_exons", id="intron2-to-intron12"),
+    pytest.param(DEL("A", "chr1", 108_000, 108_500), "intronic", id="intron4"),
+    pytest.param(DEL("A", "chr1", 132_000, 133_000), "promoter/UTR", id="right-flank"),
+    pytest.param(DEL("A", "chr1", 316_000, 318_000), "intronic", id="overlapping-padded-genes"),
+    # both ends in padding but on opposite sides: not promoter/UTR (as in v0.1)
+    pytest.param(DEL("A", "chr1", 92_000, 133_000), "between_exons", id="flank-to-flank"),
+
+    # --- v0.1 bugs still open --------------------------------------------------
     pytest.param(DEL("A", "chr1", E2[0] + 50, E2[0] + 101), "exon_altering", id="exon-inframe",
                  marks=V01_BUG("frame test uses svlen // 3 instead of svlen % 3")),
     pytest.param(dict(id="A", chrom="chr1", pos=E2[0] + 50, svlen=50, svtype="INS", alt="A" * 50),
                  "frameshift", id="INS-frameshift",
                  marks=V01_BUG("insertions get length 0; SVLEN should be used")),
-    pytest.param(DEL("A", "chr1", 103_000, 127_000), "between_exons", id="intron2-to-intron12",
-                 marks=V01_BUG("intron label keeps only the last digit (intron12 -> intron2)")),
-    pytest.param(DEL("A", "chr1", 108_000, 108_500), "intronic", id="intron4",
-                 marks=V01_BUG("len(exons) instead of len(exons[0]): intron 4 / exon 5 labelled promoter/utr")),
-    pytest.param(DEL("A", "chr1", 132_000, 133_000), "promoter/UTR", id="right-flank",
-                 marks=V01_BUG("right-hand padding labelled as intron")),
-    pytest.param(DEL("A", "chr1", 316_000, 318_000), "intronic", id="overlapping-padded-genes",
-                 marks=V01_BUG("bisect lookup misses genes whose padded intervals overlap")),
     pytest.param(dict(id="A", chrom="chr1", pos=105_500, mate=("chr2", 95_000), svtype="BND", strands="+-"),
                  "between_genes", id="fusion-needs-gene-body",
                  marks=V01_BUG("possible_fusion called when one end is only in the padding")),
@@ -63,6 +63,35 @@ def test_class(classify, record, expected):
 def test_breakend_labels(classify):
     sv = classify([DEL("A", "chr1", 105_500, 106_000)])["A"]
     assert sv.genes[0] == ("GENEA", "intron3", "+")
+
+
+# --- primary gene per breakend (overlapping and nested genes) ---------------------
+
+def test_gene_body_beats_padding(classify):
+    # 316,000 is in GENED's body and in GENEC's right padding
+    sv = classify([DEL("A", "chr1", 316_000, 318_000)])["A"]
+    assert sv.genes[0][0] == sv.genes[1][0] == "GENED"
+    assert {h.gene.name for h in sv.bp_hits[0]} == {"GENEC", "GENED"}
+
+
+def test_padding_only_breakend_uses_gene_shared_with_mate(classify):
+    # 312,000 is only in padding (GENEC right, GENED left); the other end is in GENED
+    sv = classify([DEL("A", "chr1", 312_000, 316_000)])["A"]
+    assert sv.genes[0][0] == "GENED"
+
+
+def test_nested_gene_wins_when_both_contain_the_breakends(classify):
+    sv = classify([DEL("A", "chr1", 420_500, 421_000)])["A"]
+    assert sv.genes[0][0] == sv.genes[1][0] == "GENEF"
+    assert sv.genes[2] == "intronic"
+
+
+def test_host_gene_when_only_one_end_is_in_the_nested_gene(classify):
+    # 421,000 is in the bodies of GENEF and GENEE; 430,000 is in GENEE's body
+    # (intron 2) and only in GENEF's padding -> both ends use GENEE
+    sv = classify([DEL("A", "chr1", 421_000, 430_000)])["A"]
+    assert sv.genes[0][0] == sv.genes[1][0] == "GENEE"
+    assert sv.genes[2] == "between_exons"
 
 
 def test_minus_strand_exon_numbers(classify):

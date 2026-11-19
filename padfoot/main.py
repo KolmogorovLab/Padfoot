@@ -16,7 +16,8 @@ import importlib
 import logging
 
 from padfoot.annot import annotate_things
-from padfoot.preprocess import generate_gff, generate_rm
+from padfoot.preprocess import generate_rm
+from padfoot.annotation import build_annotation, is_compact_annotation
 #from padfoot_cluster_cns import cluster_cn
 from padfoot.__version__ import __version__
 
@@ -136,7 +137,8 @@ def main():
     parser.add_argument("--out-dir", dest="out_dir", required=True, metavar="path",
                         help="Output directory")
     parser.add_argument("--gff", dest="new_gff", default=None, metavar="path",
-                        help="GFF annotation file")
+                        help="gene annotation: a GFF3 (GENCODE/Ensembl style) or a table made by "
+                             "scripts/build_annotation.py [bundled GENCODE annotation for --genome]")
     parser.add_argument("--genome", dest="genome", default="hg38", metavar="name",
                         help="Either hg38, chm13, mm10")
     parser.add_argument("--rm", dest="rm_file", default=None, metavar="path",
@@ -199,18 +201,26 @@ def main():
     logger.info("Reference FASTA index found: %s.fai", args.ref)
 
     if args.new_gff:
-        gff_path = os.path.join(args.out_dir, "gff_file.gff3")
-        logger.info("Using custom GFF input: %s", args.new_gff)
-        logger.debug("Generating normalized GFF file: %s", gff_path)
-        generate_gff(args.new_gff, gff_path)
-        args.gff_file = gff_path
-        logger.info("Prepared GFF annotations: %s", args.gff_file)
+        if not os.path.exists(args.new_gff):
+            logger.error("Annotation file does not exist: %s", args.new_gff)
+            sys.exit(1)
+        if is_compact_annotation(args.new_gff):
+            args.gff_file = os.path.abspath(args.new_gff)
+            logger.info("Using prebuilt annotation table: %s", args.gff_file)
+        else:
+            args.gff_file = os.path.join(args.out_dir, "gene_annotation.tsv.gz")
+            logger.info("Converting custom GFF3 %s to %s", args.new_gff, args.gff_file)
+            counts = build_annotation(args.new_gff, args.gff_file)
+            logger.info("Annotation table: %d genes, %d transcripts", counts["genes"], counts["transcripts"])
     else:
         if not args.genome:
-            logger.error("Please provide --gff or select --genome [hg38, mm10, chm13]")
+            logger.error("Please provide --gff or select --genome [hg38, mm10]")
             sys.exit(1)
-        args.gff_file = os.path.join(beds, f"{args.genome}.gff3.gz")
-        logger.info("Using bundled GFF annotations: %s", args.gff_file)
+        args.gff_file = os.path.join(beds, f"{args.genome}_genes.tsv.gz")
+        if not os.path.exists(args.gff_file):
+            logger.error("No bundled gene annotation for genome %s; provide one with --gff", args.genome)
+            sys.exit(1)
+        logger.info("Using bundled gene annotation: %s", args.gff_file)
 
     if args.rm_file:
         rm_path = os.path.join(args.out_dir, "rm.bed")
@@ -234,14 +244,14 @@ def main():
         logger.warning("Genome preset mm10 usually implies species 'mouse'; current value: %s", args.specie)
 
     logger.info("Annotation inputs resolved successfully")
-    logger.info("GFF file: %s", args.gff_file)
+    logger.info("Gene annotation: %s", args.gff_file)
     logger.info("RepeatMasker file: %s", args.rm_file)
 
     logger.info("Starting annotation pipeline")
-    genes, cnas, exon_pos, svs, by_gene = annotate_things(args)
+    annotation, cnas, svs, by_gene = annotate_things(args)
 
     logger.info("Annotation pipeline finished")
-    logger.info("Summary: genes=%d, cnas=%d, exon_positions=%d, svs=%d, by_gene=%d",
-                len(genes), len(cnas), len(exon_pos), len(svs), len(by_gene))
+    logger.info("Summary: genes=%d, cnas=%d, svs=%d, by_gene=%d",
+                len(annotation.genes), len(cnas), len(svs), len(by_gene))
     logger.info("Log file written to: %s", log_file)
     logger.info("Padfoot completed successfully")

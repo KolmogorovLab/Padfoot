@@ -11,7 +11,6 @@ from collections import defaultdict, Counter
 from typing import Dict, List
 import bisect
 import subprocess
-import gzip
 from Bio import Align
 import os
 import copy
@@ -19,12 +18,15 @@ import numpy as np
 import pandas as pd
 import logging
 
+from padfoot.annotation import load_annotation
+
 logger = logging.getLogger()
 
 class SV(object):
     __slots__ = ("bp_1", "direction_1", "bp_2", "direction_2", "supp",'supp_read_ids', 'has_ins', 'sv_type','vaf','loh', 'prec',\
                  'vcf_id', 'is_single', 'vntr', 'cluster_id', 'detailed_type', 'ins_seq', 'genes', 'repeat', 'microh', 'ins_align',\
-                     'telomere', 'repeat_bp', 'cn_assigned', 'cn_altering', 'hp1', 'hp2', 'score', 'cancer', 'impact')
+                     'telomere', 'repeat_bp', 'cn_assigned', 'cn_altering', 'hp1', 'hp2', 'score', 'cancer', 'impact',\
+                     'bp_hits')
     def __init__(self, bp_1, direction_1, bp_2, direction_2, supp, has_ins, sv_type,vaf, vcf_id, is_single, vntr, ins_seq, cluster_id, detailed_type, hp1, hp2):
         self.bp_1 = bp_1
         self.direction_1 = direction_1
@@ -46,6 +48,7 @@ class SV(object):
         self.cluster_id = cluster_id
         self.detailed_type = detailed_type
         self.genes = []
+        self.bp_hits = [[], []]
         self.repeat = []
         self.microh = []
         self.ins_align = []
@@ -388,97 +391,36 @@ def check_hp_svs(cnas):
             else:
                 cn.sv2 = new_sv
     
-def get_genes(gff_file):
-    THR = 10000
-    genes = defaultdict(list)
-    exon_pos = defaultdict(list)
-    fopen =gzip.open(gff_file, 'rt')
-    for line in fopen:
-        ref_id, gene_name, strand, typ, start, end = line.split()
-        start = int(start)
-        end = int(end)
-        THR1, THR2 = (THR, 0) if strand == '+' else (0, THR)
-        if typ == 'gene':
-            if ref_id in genes.keys():
-                genes[ref_id][0].append(gene_name)
-                genes[ref_id][1].append(start-THR)
-                genes[ref_id][2].append(end+THR)
-            else:
-                genes[ref_id] = [[],[],[]]
-                genes[ref_id][0].append(gene_name)
-                genes[ref_id][1].append(start-THR)
-                genes[ref_id][2].append(end+THR)
-        elif typ.startswith(gene_name) or 'codon' in typ or 'UTR' in typ:
-            continue
-        else:
-            if gene_name in exon_pos.keys():
-                exon_pos[gene_name][0].append(start)
-                exon_pos[gene_name][1].append(end)
-                exon_pos[gene_name][2].append(typ)
-            else:
-                exon_pos[gene_name] = [[],[],[],[strand]]
-                exon_pos[gene_name][0].append(start)
-                exon_pos[gene_name][1].append(end)
-                exon_pos[gene_name][2].append(typ)
-    for gene_name,exons in exon_pos.items():
-        exonls = [ind for ind, typ in enumerate(exons[2]) if 'exon' in typ]
-        utrs5 = [ind for ind, typ in enumerate(exons[2]) if typ == 'five_prime_UTR']
-        utrs3 = [ind for ind, typ in enumerate(exons[2]) if typ == 'three_prime_UTR']
-        if utrs5:
-            st5 = min([exons[0][i] for i in utrs5])
-            end5 = max([exons[1][i] for i in utrs5])
-        if utrs3:
-            st3 = min([exons[0][i] for i in utrs3])
-            end3 = max([exons[1][i] for i in utrs3])
-        if utrs5 and utrs3:
-            exons[0] = [st5] + [exons[0][i] for i in exonls] + [st3]
-            exons[1] = [end5] + [exons[1][i] for i in exonls] + [end3]
-            exons[2] = ['five_prime_UTR'] + [exons[2][i] for i in exonls] + ['three_prime_UTR']
-        elif utrs5:
-            exons[0] = [st5] + [exons[0][i] for i in exonls]
-            exons[1] = [end5] + [exons[1][i] for i in exonls]
-            exons[2] = ['five_prime_UTR'] + [exons[2][i] for i in exonls]
-        elif utrs3:
-            exons[0] = [exons[0][i] for i in exonls] + [st3]
-            exons[1] = [exons[1][i] for i in exonls] + [end3]
-            exons[2] = [exons[2][i] for i in exonls] + ['three_prime_UTR']
-        exons[2] = [x for _, x in sorted(zip(exons[0], exons[2]))]
-        exons[1] = [x for _, x in sorted(zip(exons[0], exons[1]))]
-        exons[0] = sorted(exons[0])
-    return (genes, exon_pos)
+def get_genes(annotation_file):
+    """Load the compact gene annotation (see padfoot/annotation.py)."""
+    return load_annotation(annotation_file)
 
-def annotBPs(sv, bp_1, genes, exon_pos, by_gene, bp):
-    if not bp_1[0] in list(genes.keys()) and not 'chr' + bp_1[0] in list(genes.keys()):
-        sv.genes.append(())
-    else:
-        if bp_1[0] in list(genes.keys()):
-            genels = genes[bp_1[0]]
-        else:
-            genels = genes['chr' + bp_1[0]]
-        ind1 = bisect.bisect_right(genels[1], bp_1[1])
-        ind2 = bisect.bisect_left(genels[2], bp_1[1])
-        if ind1 == ind2+1:
-            if genels[0][ind2] in list(exon_pos.keys()):
-                exons = exon_pos[genels[0][ind2]]
-                ind1a = bisect.bisect_right(exons[0], bp_1[1])
-                ind1b = bisect.bisect_left(exons[1], bp_1[1])
-                if ind1a == 0 or ind1b == len(exons):
-                    ty = 'promoter/utr'
-                elif ind1a == ind1b:
-                    ty = 'intron' + exons[2][ind1a - 1][-1]
-                else:
-                    ty = exons[2][ind1a - 1]
-            sv.genes.append((genels[0][ind2], ty, exons[3][0]))
-            add_gene(by_gene, genels[0][ind2], bp_1[0], genels[1][ind2], genels[2][ind2])
-            by_gene[genels[0][ind2]].SV.append((sv, bp))
-        else:
-            sv.genes.append(())
-            
-def annot_SVS(genes, exon_pos, svs, by_gene):
+def pick_primary(hits, other_hits):
+    """Primary gene for one breakend, in order of preference:
+    1. a gene whose body contains the breakend (over one reached only through the padding);
+    2. a gene whose body also contains the other breakend, then one the other
+       breakend reaches at all (so that both ends agree where possible);
+    3. the shortest gene (a nested gene over its host)."""
+    if not hits:
+        return None
+    other_body = {h.gene.key for h in other_hits if h.in_body}
+    other_any = {h.gene.key for h in other_hits}
+    return min(hits, key=lambda h: (not h.in_body, h.gene.key not in other_body, h.gene.key not in other_any,
+                                    h.gene.end - h.gene.start, h.gene.start, h.gene.gene_id))
+
+def annot_SVS(annotation, svs, by_gene):
     for sv in svs:
-        annotBPs(sv, sv.bp_1, genes, exon_pos, by_gene,1)
-        annotBPs(sv, sv.bp_2, genes, exon_pos, by_gene,2)
-    for sv in svs:
+        hits1 = annotation.lookup(*sv.bp_1)
+        hits2 = annotation.lookup(*sv.bp_2)
+        p1, p2 = pick_primary(hits1, hits2), pick_primary(hits2, hits1)
+        sv.bp_hits = [hits1, hits2]
+        sv.genes = [p1.as_tuple() if p1 else (), p2.as_tuple() if p2 else ()]
+        for hit, bp in ((p1, 1), (p2, 2)):
+            if hit:
+                g = hit.gene
+                add_gene(by_gene, g.name, g.chrom, g.start, g.end)
+                by_gene[g.name].SV.append((sv, bp))
+
         if not sv.genes[1] and not sv.genes[0]:
             sv.genes.append('')
             continue
@@ -487,7 +429,7 @@ def annot_SVS(genes, exon_pos, svs, by_gene):
             sv.score += 2
             sv.impact = 'LOW'
             continue
-        if sv.genes[0] == sv.genes[1]:
+        if p1.key == p2.key:
             if 'exon'  in sv.genes[0][1]:
                 svlen = sv.bp_2[1] - sv.bp_1[1]
                 if svlen // 3:
@@ -507,12 +449,11 @@ def annot_SVS(genes, exon_pos, svs, by_gene):
                 sv.score += 1
                 sv.impact = 'LOW'
         else:
-            if sv.genes[0][0] == sv.genes[1][0]:
-                if not sv.genes[0][1] == sv.genes[1][1]:
-                    sv.genes.append('between_exons')
-                    sv.score += 3
-                    sv.impact = 'HIGH'
-            elif not sv.genes[0][0] == sv.genes[1][0]:
+            if p1.gene.key == p2.gene.key:
+                sv.genes.append('between_exons')
+                sv.score += 3
+                sv.impact = 'HIGH'
+            else:
                 if sv.direction_1 == sv.direction_2 and not sv.genes[0][2] == sv.genes[1][2]:
                     sv.genes.append('possible_fusion')
                     sv.score += 3
@@ -530,9 +471,10 @@ def add_gene(by_gene, gene, ref_id, pos1, pos2):
     if not gene in by_gene.keys():
         by_gene[gene] = Gene(ref_id, pos1, pos2, gene)
 
-def annot_CNAs(genes, cnas, ploidy, by_gene):
+def annot_CNAs(annotation, cnas, ploidy, by_gene):
     hps = [1,2]
-    for ref_id, genels in genes.items():
+    pad = annotation.padding
+    for ref_id, genels in annotation.genes_by_chrom().items():
         if not (ref_id,1) in cnas.keys():
             continue
         for hp in hps:
@@ -540,10 +482,11 @@ def annot_CNAs(genes, cnas, ploidy, by_gene):
             cn_start = [cn.pos_1 for cn in cn_prof]
             cn_end = [cn.pos_2 for cn in cn_prof]
             cn = [cn.cn for cn in cn_prof]
-            for i, gene in enumerate(genels[0]):
-                ind1 = bisect.bisect_right(cn_start, genels[1][i])
-                ind2 = bisect.bisect_left(cn_end, genels[2][i])
-                add_gene(by_gene, gene, ref_id, genels[1][i], genels[2][i])
+            for g in genels:
+                gene = g.name
+                ind1 = bisect.bisect_right(cn_start, g.start - pad)
+                ind2 = bisect.bisect_left(cn_end, g.end + pad)
+                add_gene(by_gene, gene, ref_id, g.start, g.end)
                 if not ind1 - ind2 == 1:
                     cn_prof[ind1-1].genes.append((gene, 'disturbed'))
                 elif cn[ind1-1] > ploidy[hp-1]:
@@ -818,19 +761,17 @@ def output_genes(by_gene, out_dir):
 def annotate_things(args):
     cna_vcf, vcf_file, t, ref, out_dir = args.cna_vcf, args.vcf_file, args.threads, args.ref, args.out_dir
     by_gene = defaultdict(list)
-    (genes, exon_pos) = get_genes(args.gff_file)
+    annotation = get_genes(args.gff_file)
     svs = get_bps(vcf_file)
     cnas = []
     if cna_vcf:
         cnas, ploidy = get_CNA(cna_vcf, svs)
-        annot_CNAs(genes, cnas, ploidy, by_gene)
-    annot_SVS(genes, exon_pos, svs, by_gene)
+        annot_CNAs(annotation, cnas, ploidy, by_gene)
+    annot_SVS(annotation, svs, by_gene)
     if args.specie == 'human':
         cancer_annot(svs, by_gene)
     annot_ins(svs, ref,t, args.rm_file, args.specie, args.run_repeatmasker)
     get_microhomology(svs, ref)
     output_svs(svs, out_dir)
     output_genes(by_gene, out_dir)
-    return (genes, cnas, exon_pos, svs, by_gene)
-    
-
+    return (annotation, cnas, svs, by_gene)
