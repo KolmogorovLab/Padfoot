@@ -19,11 +19,13 @@ from padfoot.annot import annotate_things
 from padfoot.preprocess import generate_rm
 from padfoot.annotation import build_annotation, is_compact_annotation
 from padfoot.copynumber import SEXES, GAIN_HIGH_MULTIPLIER
-#from padfoot_cluster_cns import cluster_cn
 from padfoot.__version__ import __version__
 
 
 logger = logging.getLogger()
+
+# chr1 length of each assembly, to check that --genome matches --ref
+GENOME_CHR1 = {"hg38": 248_956_422, "chm13": 248_387_328, "mm10": 195_471_971}
 
 def _version():
     return __version__
@@ -60,7 +62,7 @@ def _check_python_dependencies():
 
 
 def _check_external_dependencies(args, ref_path=None):
-    required_bins = ["samtools", "minimap2"]
+    required_bins = ["samtools", "minimap2", "bedtools"]
     missing_bins = [tool for tool in required_bins if shutil.which(tool) is None]
 
     if missing_bins:
@@ -95,6 +97,26 @@ def _check_external_dependencies(args, ref_path=None):
             )
             sys.exit(1)
             
+def _check_genome(genome, fai_path):
+    """Warn if the reference's chr1 length does not match --genome."""
+    lengths = {}
+    with open(fai_path) as f:
+        for line in f:
+            name, length = line.split("\t")[:2]
+            lengths[name] = int(length)
+    chr1 = lengths.get("chr1", lengths.get("1"))
+    if genome not in GENOME_CHR1:
+        logger.warning("Cannot check that the reference is %s (known: %s)", genome, ", ".join(GENOME_CHR1))
+    elif chr1 is None:
+        logger.warning("Reference has no chr1; cannot check that it is %s", genome)
+    elif chr1 != GENOME_CHR1[genome]:
+        found = [g for g, n in GENOME_CHR1.items() if n == chr1]
+        logger.warning("--genome is %s but the reference chr1 (%d bp) %s; bundled %s files may not fit "
+                       "the reference", genome, chr1,
+                       f"matches {found[0]}" if found else "matches none of " + ", ".join(GENOME_CHR1), genome)
+    else:
+        logger.info("Reference chr1 length matches %s", genome)
+
 def _enable_logging(log_file, debug, overwrite):
     log_formatter = logging.Formatter(
         "[%(asctime)s] %(name)s: %(levelname)s: %(message)s",
@@ -144,7 +166,8 @@ def main():
                         help="gene annotation: a GFF3 (GENCODE/Ensembl style) or a table made by "
                              "scripts/build_annotation.py [bundled GENCODE annotation for --genome]")
     parser.add_argument("--genome", dest="genome", default="hg38", metavar="name",
-                        help="Either hg38, chm13, mm10")
+                        help="assembly of --ref; selects the bundled gene, RepeatMasker and cancer gene files "
+                             "(bundled: hg38, mm10) [hg38]")
     parser.add_argument("--rm", dest="rm_file", default=None, metavar="path",
                         help="Repeat masker annotation file")
     parser.add_argument("-t", "--threads", dest="threads", default=8, type=int, metavar="int",
@@ -212,6 +235,7 @@ def main():
         sys.exit(1)
 
     logger.info("Reference FASTA index found: %s.fai", args.ref)
+    _check_genome(args.genome, args.ref + ".fai")
 
     if args.new_gff:
         if not os.path.exists(args.new_gff):
@@ -247,6 +271,9 @@ def main():
             logger.error("Please provide --rm or select --genome [hg38, mm10, chm13]")
             sys.exit(1)
         args.rm_file = os.path.join(beds, f"{args.genome}_rm.bed.gz")
+        if not os.path.exists(args.rm_file):
+            logger.error("No bundled RepeatMasker annotation for genome %s; provide one with --rm", args.genome)
+            sys.exit(1)
         logger.info("Using bundled RepeatMasker annotations: %s", args.rm_file)
 
     if args.cancer_genes and args.cancer_genes.lower() == "none":

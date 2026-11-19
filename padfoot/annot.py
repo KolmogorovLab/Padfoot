@@ -449,33 +449,24 @@ def check_homology(seq, sv):
         sv.microh.append(ss[-1][1])
     
 def get_microhomology(svs, ref):
+    """Microhomology at the junction, from +-25 bp of reference around each breakend."""
     THR = 25
-    bpls = []
-    f = open("temp_bpseq.tsv", "w")
-    for sv in svs:
-        if sv.sv_type == 'INS':
-            continue
-        bpls.append(sv)
-        run_command(f'samtools faidx {ref} \'{sv.bp_1[0]}:{max(0, sv.bp_1[1]-THR)}-{sv.bp_1[1]+THR}\' >> temp_bpseq.tsv')
-        run_command(f'samtools faidx {ref} \'{sv.bp_2[0]}:{max(0, sv.bp_2[1]-THR)}-{sv.bp_2[1]+THR}\' >> temp_bpseq.tsv')
-    
-    f.close()
-  
-    f = open('temp_bpseq.tsv', 'r')
-    t = 0
-    seq = []
-    tt = 0
-    for line in f:
-        if line.startswith('>'):
-            continue
-        else:
-            seq.append(line.strip())
-            t+=1
-        if t == 2:
-            check_homology(seq, bpls[tt])
-            t = 0
+    missing = set()
+    with pysam.FastaFile(ref) as fasta:
+        for sv in svs:
+            if sv.sv_type == 'INS':
+                continue
             seq = []
-            tt+=1
+            for chrom, pos in (sv.bp_1, sv.bp_2):
+                if chrom not in fasta:
+                    missing.add(chrom)
+                    break
+                seq.append(fasta.fetch(chrom, max(0, pos - THR - 1), pos + THR).upper())
+            else:
+                check_homology(seq, sv)
+    if missing:
+        logger.warning("Microhomology not computed for SVs on %d contig(s) missing from the reference: %s",
+                       len(missing), ', '.join(sorted(missing)))
 
 def get_align(svls):
     MAPQ_THR = 45
