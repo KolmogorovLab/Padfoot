@@ -14,6 +14,7 @@ import argparse
 import os
 import importlib
 import logging
+import hashlib
 
 from padfoot.annot import annotate_things
 from padfoot.preprocess import generate_rm
@@ -34,8 +35,8 @@ def _check_python_dependencies():
     required_modules = {
         "pysam": "pysam",
         "pandas": "pandas",
-        "numpy": "numpy",
         "Bio": "biopython",
+        "intervaltree": "intervaltree",
     }
 
     missing = []
@@ -116,6 +117,13 @@ def _check_genome(genome, fai_path):
                        f"matches {found[0]}" if found else "matches none of " + ", ".join(GENOME_CHR1), genome)
     else:
         logger.info("Reference chr1 length matches %s", genome)
+
+def _md5(path):
+    h = hashlib.md5()
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(1 << 20), b""):
+            h.update(block)
+    return h.hexdigest()
 
 def _enable_logging(log_file, debug, overwrite):
     log_formatter = logging.Formatter(
@@ -287,13 +295,13 @@ def main():
         bundled = os.path.join(beds, f"{args.genome}_cancer_genes.tsv")
         args.cancer_genes = bundled if os.path.exists(bundled) else None
     if args.cancer_genes:
-        logger.info("Cancer gene list: %s", args.cancer_genes)
+        logger.info("Cancer gene list: %s (md5 %s)", args.cancer_genes, _md5(args.cancer_genes))
     else:
         logger.info("No cancer gene list; cancer roles and known fusions not annotated")
 
     logger.info("Annotation inputs resolved successfully")
     logger.info("Gene annotation: %s", args.gff_file)
-    logger.info("RepeatMasker file: %s", args.rm_file)
+    logger.info("RepeatMasker file: %s (md5 %s)", args.rm_file, _md5(args.rm_file))
 
     logger.info("Starting annotation pipeline")
     annotation, profile, svs, by_gene = annotate_things(args)

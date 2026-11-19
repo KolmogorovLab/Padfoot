@@ -351,6 +351,7 @@ def load_annotation(path, padding=PADDING):
         g.end = max(t.end for t in g.transcripts)
         if g.naming is None:
             g.naming = g.transcripts[0]
-    logger.info("Loaded annotation %s: %d genes, %d transcripts (source %s, built %s)", path, len(genes),
-                sum(len(g.transcripts) for g in genes.values()), meta.get("source"), meta.get("built"))
+    logger.info("Loaded annotation %s: %d genes, %d transcripts (source %s, md5 %s, built %s)", path, len(genes),
+                sum(len(g.transcripts) for g in genes.values()), meta.get("source"), meta.get("md5"),
+                meta.get("built"))
     return Annotation(list(genes.values()), meta, padding)

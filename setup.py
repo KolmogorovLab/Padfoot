@@ -27,6 +27,8 @@ setup(name='padfoot',
       author_email = 'aysegokce.keskus@nih.gov',
       license='BSD-3-Clause',
       packages=['padfoot'],
+      python_requires='>=3.10',
+      install_requires=['pysam', 'pandas', 'biopython', 'intervaltree'],
       package_data={'padfoot': ['../beds/*']},
       entry_points={'console_scripts': ['padfoot = padfoot.main:main']},
       )

@@ -395,7 +395,7 @@ def get_repeat(svls):
     if os.path.exists('temp_ins.fa.out'):
         rep_file = open('temp_ins.fa.out', 'r')
     else:
-        logger.warning("RepeatMasker output file not found: %s. RepeatMasker may have failed.")
+        logger.warning("RepeatMasker output not found (temp_ins.fa.out); RepeatMasker may have failed")
         return ''
     reps = defaultdict(int)
     svrep = defaultdict(list)
@@ -510,7 +510,8 @@ def annot_ins(svs, ref,t, rm_bed, repeatmasker_species=None):
     for sv in svs:
          svls[sv.vcf_id] = sv
     write_ins(svs, ref, t, repeatmasker_species)
-    get_repeat(svls)
+    if repeatmasker_species:
+        get_repeat(svls)
     get_align(svls)
     get_tel(svs)
     annot_bp_repeat(svls, rm_bed)
