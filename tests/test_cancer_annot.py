@@ -8,7 +8,7 @@ import pytest
 from padfoot import annot
 
 FUSION_BND = dict(id="F", chrom="chr1", pos=105_500, mate=("chr2", 105_000), svtype="BND", strands="+-")
-BUNDLED = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "beds", "cancer_genes.tsv")
+BUNDLED = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "beds", "hg38_cancer_genes.tsv")
 
 
 def write_list(path, rows, header=("original_symbol", "Gene_symbol", "Role_in_cancer", "fusion", "Supp", "nSupp")):

@@ -75,11 +75,9 @@ def _check_external_dependencies(args, ref_path=None):
         )
         sys.exit(1)
     
-    required_bins = ["RepeatMasker"]
-    missing_bins = [tool for tool in required_bins if shutil.which(tool) is None]
-    if missing_bins:
-        args.run_repeatmasker = False
-        logger.info('RepeatMasker is not found... \n Skipping RepeatMasker')
+    if args.repeatmasker_species and shutil.which("RepeatMasker") is None:
+        logger.error("--repeatmasker-species given but RepeatMasker is not in PATH")
+        sys.exit(1)
 
     if ref_path is not None:
         if not os.path.exists(ref_path):
@@ -151,13 +149,14 @@ def main():
                         help="Repeat masker annotation file")
     parser.add_argument("-t", "--threads", dest="threads", default=8, type=int, metavar="int",
                         help="number of parallel threads [8]")
-    parser.add_argument("--specie", dest="specie", default="human", help="Specie")
     parser.add_argument("--cancer-genes", dest="cancer_genes", default=None, metavar="path",
-                        help="cancer gene list (TSV with Gene_symbol, Role_in_cancer, fusion columns) "
-                             "[bundled list for --specie human, none otherwise]")
+                        help="cancer gene list (TSV with Gene_symbol, Role_in_cancer, fusion columns), "
+                             "or 'none' [bundled list for --genome, if there is one]")
     parser.add_argument("--whole-gene-max-sv", dest="whole_gene_max_sv", default=1_000_000, type=int, metavar="int",
                         help="label genes lying entirely inside a DEL/DUP/INV up to this length [1000000]")
-    parser.add_argument("--skip_RepeatMasker", dest="run_repeatmasker", action = "store_false", help="Skip RepeatMasker [True]")
+    parser.add_argument("--repeatmasker-species", dest="repeatmasker_species", default=None, metavar="name",
+                        help="run RepeatMasker on insertion sequences with this -species (e.g. human, mouse) "
+                             "[not run]")
     args = parser.parse_args()
 
     beds = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "beds"))
@@ -190,7 +189,7 @@ def main():
     logger.info("Sex: %s", args.sex)
     logger.info("Reference FASTA: %s", args.ref)
     logger.info("Threads: %s", args.threads)
-    logger.info("Requested species: %s", args.specie)
+    logger.info("RepeatMasker on insertions: %s", args.repeatmasker_species or "not run")
     logger.info("Requested genome preset: %s", args.genome)
 
     if not os.path.exists(args.vcf_file):
@@ -250,24 +249,20 @@ def main():
         args.rm_file = os.path.join(beds, f"{args.genome}_rm.bed.gz")
         logger.info("Using bundled RepeatMasker annotations: %s", args.rm_file)
 
-    if not args.specie:
-        logger.error("Please provide --specie for repeat annotation")
-        sys.exit(1)
-
-    if args.genome == "mm10" and args.specie != "mouse":
-        logger.warning("Genome preset mm10 usually implies species 'mouse'; current value: %s", args.specie)
-
-    if args.cancer_genes:
+    if args.cancer_genes and args.cancer_genes.lower() == "none":
+        args.cancer_genes = None
+    elif args.cancer_genes:
         if not os.path.exists(args.cancer_genes):
             logger.error("Cancer gene list does not exist: %s", args.cancer_genes)
             sys.exit(1)
         args.cancer_genes = os.path.abspath(args.cancer_genes)
-    elif args.specie == "human":
-        args.cancer_genes = os.path.join(beds, "cancer_genes.tsv")
+    else:
+        bundled = os.path.join(beds, f"{args.genome}_cancer_genes.tsv")
+        args.cancer_genes = bundled if os.path.exists(bundled) else None
     if args.cancer_genes:
         logger.info("Cancer gene list: %s", args.cancer_genes)
     else:
-        logger.info("No cancer gene list for species %s; cancer roles and known fusions not annotated", args.specie)
+        logger.info("No cancer gene list; cancer roles and known fusions not annotated")
 
     logger.info("Annotation inputs resolved successfully")
     logger.info("Gene annotation: %s", args.gff_file)

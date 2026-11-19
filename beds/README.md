@@ -31,10 +31,11 @@ To rebuild:
 python scripts/build_annotation.py gencode.v50.basic.annotation.gff3.gz beds/hg38_genes.tsv.gz
 ```
 
-## Cancer gene list (`cancer_genes.tsv`)
+## Cancer gene list (`<genome>_cancer_genes.tsv`)
 
-Human only; used by default with `--specie human`. Replace it with
-`--cancer-genes <file>`. Padfoot reads `Gene_symbol`, `Role_in_cancer`
+`hg38_cancer_genes.tsv` is used by default with `--genome hg38`; there is
+no list for mm10. Replace it with `--cancer-genes <file>`, or turn it off
+with `--cancer-genes none`. Padfoot reads `Gene_symbol`, `Role_in_cancer`
 (oncogene / TSG / oncogene,TSG) and `fusion` (comma-separated partner
 symbols); other columns are kept for reference. Both are labels only and
 never change a tier. A fusion pair matches when it is listed under either

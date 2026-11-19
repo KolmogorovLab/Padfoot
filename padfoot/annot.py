@@ -350,7 +350,7 @@ def run_command(cmd):
     p = subprocess.Popen(cmd, shell= True)
     p.wait()
 
-def write_ins(svs, ref, t, specie, run_repeatmasker):
+def write_ins(svs, ref, t, repeatmasker_species=None):
     fa_out = open('temp_ins.fa', 'w')
     for sv in svs:
         if sv.ins_seq:
@@ -362,8 +362,10 @@ def write_ins(svs, ref, t, specie, run_repeatmasker):
             fa_out.write(sv.has_ins)
             fa_out.write('\n')
     fa_out.close()
-    if run_repeatmasker:
-        run_command(f"RepeatMasker -species {specie} temp_ins.fa")
+    if os.path.exists('temp_ins.fa.out'):
+        os.remove('temp_ins.fa.out')            # stale output of an earlier run in the same temp dir
+    if repeatmasker_species:
+        run_command(f"RepeatMasker -species {repeatmasker_species} temp_ins.fa")
     run_command(f"minimap2 -ax map-ont {ref} temp_ins.fa -k 17 -y -K 5G -t {t} --eqx | samtools sort -@ {t} -m 4G > temp_ins.bam")
     run_command(f"samtools index -@ {t} temp_ins.bam")
     
@@ -491,11 +493,11 @@ def annot_bp_repeat(svls, rm_bed):
         ind = 0 if l[4] == 'BP1' else 1
         svls[l[3]].repeat_bp[ind] = l[-1]
         
-def annot_ins(svs, ref,t, rm_bed, specie, run_repeatmasker):
+def annot_ins(svs, ref,t, rm_bed, repeatmasker_species=None):
     svls = defaultdict(list)
     for sv in svs:
          svls[sv.vcf_id] = sv
-    write_ins(svs, ref, t, specie, run_repeatmasker)
+    write_ins(svs, ref, t, repeatmasker_species)
     get_repeat(svls)
     get_align(svls)
     get_tel(svs)
@@ -622,7 +624,7 @@ def annotate_things(args):
     annot_SVS(annotation, svs, by_gene, getattr(args, 'whole_gene_max_sv', WHOLE_GENE_MAX_SV))
     if getattr(args, 'cancer_genes', None):
         cancer_annot(svs, by_gene, args.cancer_genes)
-    annot_ins(svs, ref,t, args.rm_file, args.specie, args.run_repeatmasker)
+    annot_ins(svs, ref,t, args.rm_file, getattr(args, 'repeatmasker_species', None))
     get_microhomology(svs, ref)
     output_svs(svs, out_dir)
     output_genes(by_gene, out_dir)
