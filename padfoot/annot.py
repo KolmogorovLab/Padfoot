@@ -11,6 +11,7 @@ from collections import defaultdict
 import subprocess
 from Bio import Align
 import os
+import gzip
 import logging
 
 from padfoot.annotation import load_annotation
@@ -154,9 +155,32 @@ class GeneSVPair(object):
         what = self.cls or ','.join(self.labels)
         return (self.tier or '-') + ':[' + self.sv.vcf_id + ',' + self.sv.pos_str() + fus + ',' + what + ']'
 
+def drop_negative_pos(vcf_file, out_path='severus_valid_pos.vcf'):
+    """Severus can write records with POS < 0 (e.g. on short contigs or HPV); htslib
+    cannot parse them and stops reading the file. Return a copy without those
+    records (or the input itself if there are none)."""
+    opener = gzip.open if vcf_file.endswith('.gz') else open
+    bad = []
+    with opener(vcf_file, 'rt') as f:
+        lines = f.readlines()
+    kept = []
+    for line in lines:
+        if not line.startswith('#'):
+            fields = line.split('\t', 3)
+            if len(fields) > 2 and fields[1].lstrip('-').isdigit() and int(fields[1]) < 0:
+                bad.append(f'{fields[2]} ({fields[0]}:{fields[1]})')
+                continue
+        kept.append(line)
+    if not bad:
+        return vcf_file
+    logger.warning("Skipped %d Severus record(s) with a negative position: %s", len(bad), ', '.join(bad))
+    with open(out_path, 'w') as f:
+        f.writelines(kept)
+    return out_path
+
 def get_bps(vcf_file):
     svs = defaultdict(list)
-    vcf = pysam.VariantFile(vcf_file)
+    vcf = pysam.VariantFile(drop_negative_pos(vcf_file))
     for var in vcf:
         if var.info['SVTYPE'] == 'BND' and var.id.endswith('_2'):
             continue    # the _1 record carries both breakends (HP=<bp1>|<bp2>)

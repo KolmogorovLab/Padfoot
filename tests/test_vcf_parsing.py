@@ -1,5 +1,8 @@
 """Severus VCF parsing (annot.get_bps)."""
 
+from padfoot import annot
+import severus_vcf
+
 
 def by_id(svs):
     return {sv.vcf_id: sv for sv in svs}
@@ -44,3 +47,16 @@ def test_cluster_and_detailed_type_are_kept(parse_svs):
                          cluster="severus_7", detailed_type="complex_inv")])[0]
     assert sv.cluster_id == "severus_7"
     assert sv.detailed_type == "complex_inv"
+
+
+def test_negative_position_is_skipped(tmp_path, monkeypatch, caplog):
+    monkeypatch.chdir(tmp_path)                       # the cleaned copy goes to the working (temp) dir
+    path = severus_vcf.write_vcf(tmp_path / "s.vcf", [
+        dict(id="D1", chrom="chr1", pos=1000, end=2000, svtype="DEL"),
+        dict(id="NEG", chrom="chr1", pos=5000, end=6000, svtype="DEL"),
+        dict(id="D2", chrom="chr1", pos=7000, end=8000, svtype="DEL")])
+    text = path.read_text().replace("\t5000\tNEG", "\t-1518\tNEG")
+    path.write_text(text)
+    svs = annot.get_bps(str(path))
+    assert [sv.vcf_id for sv in svs] == ["D1", "D2"]
+    assert "NEG (chr1:-1518)" in caplog.text
