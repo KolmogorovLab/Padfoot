@@ -56,3 +56,11 @@ def test_insertions_are_skipped(parse_svs, tmp_path):
     mh = run(parse_svs, write_ref(tmp_path / "ref.fa"),
              [dict(id="I", chrom="chr1", pos=500, svtype="INS", svlen=60, alt="A" * 61)])
     assert mh["I"] == []
+
+
+def test_breakend_near_contig_end(parse_svs, tmp_path, caplog):
+    records = [dict(id="E", chrom="chr1", pos=500, end=1_990, svtype="DEL", strands="+-"),
+               dict(id="S", chrom="chr1", pos=10, end=1_500, svtype="DEL", strands="+-"), DEL]
+    mh = run(parse_svs, write_ref(tmp_path / "ref.fa"), records)
+    assert mh["E"] == [] and mh["S"] == [] and mh["D"]
+    assert "E, S" in caplog.text

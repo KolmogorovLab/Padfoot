@@ -452,6 +452,7 @@ def get_microhomology(svs, ref):
     """Microhomology at the junction, from +-25 bp of reference around each breakend."""
     THR = 25
     missing = set()
+    at_end = []
     with pysam.FastaFile(ref) as fasta:
         for sv in svs:
             if sv.sv_type == 'INS':
@@ -461,12 +462,19 @@ def get_microhomology(svs, ref):
                 if chrom not in fasta:
                     missing.add(chrom)
                     break
-                seq.append(fasta.fetch(chrom, max(0, pos - THR - 1), pos + THR).upper())
+                # check_homology expects the breakend at index THR of a full window
+                if pos - THR - 1 < 0 or pos + THR > fasta.get_reference_length(chrom):
+                    at_end.append(sv.vcf_id)
+                    break
+                seq.append(fasta.fetch(chrom, pos - THR - 1, pos + THR).upper())
             else:
                 check_homology(seq, sv)
     if missing:
         logger.warning("Microhomology not computed for SVs on %d contig(s) missing from the reference: %s",
                        len(missing), ', '.join(sorted(missing)))
+    if at_end:
+        logger.warning("Microhomology not computed for %d SV(s) with a breakend within %d bp of a contig end: %s",
+                       len(at_end), THR, ', '.join(at_end))
 
 def get_align(svls):
     MAPQ_THR = 45
